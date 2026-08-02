@@ -53,7 +53,7 @@ func New(
 		MaxConcurrency: cfg.Verify.MaxConcurrency,
 	})
 
-	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder}
+	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder, Search: reg, LLM: llmClient}
 	wikiProv := func(context.Context) (*provider.Provider, error) {
 		return buildWikiProvider(cfg), nil
 	}

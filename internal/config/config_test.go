@@ -47,6 +47,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Verify.MaxConcurrency != 4 {
 		t.Errorf("default verify max_concurrency = %d, want 4", cfg.Verify.MaxConcurrency)
 	}
+	if cfg.Wiki.MaxHops != 3 || cfg.Wiki.BatchSize != 10 {
+		t.Errorf("default wiki = %+v, want MaxHops=3 BatchSize=10", cfg.Wiki)
+	}
 }
 
 func TestLoadFileOverrides(t *testing.T) {

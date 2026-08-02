@@ -35,6 +35,11 @@ verify:
   web_tool: myagent              # 网络工具名（registry 中 active；默认 myagent=my-agent-core 12 provider）
   max_concurrency: 4             # 候选核查并行度
 
+# wiki 写入与相关页协同
+wiki:
+  max_hops: 3                    # 协同图传播深度（至多 3 跳）
+  batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）
+
 # RAG 召回
 recall:
   top_k: 8

@@ -50,6 +50,10 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 	if err != nil || pg == nil {
 		return title, 0, "unknown", "unknown", false
 	}
+	// Non-active pages (superseded/archived) are not recalled.
+	if pg.Status != "" && pg.Status != "active" {
+		return "", 0, "", "", true
+	}
 	// Page-level grading: derive from the strongest claim, if any.
 	if len(pg.Claims) == 0 {
 		return pg.Title, 0, "unknown", "unknown", false

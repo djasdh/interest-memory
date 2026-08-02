@@ -427,6 +427,20 @@ func TestGradeForRecallArchivedFiltered(t *testing.T) {
 	}
 }
 
+func TestGradeForRecallSupersededPageFiltered(t *testing.T) {
+	st := &fakeStore{page: &store.Page{ID: "pg1", Title: "Page", Status: "superseded", Claims: []store.Claim{
+		{Text: "a", Confidence: 0.9, Status: "supported"},
+	}}}
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{{ID: "pg1", Kind: "wiki_page", Score: 0.7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("graded = %d, want 0 (superseded page filtered)", len(got))
+	}
+}
+
 func TestGradeForRecallPage(t *testing.T) {
 	st := &fakeStore{page: &store.Page{ID: "pg1", Title: "Page", Claims: []store.Claim{
 		{Text: "a", Confidence: 0.4, Status: "contested", Freshness: store.Freshness{Level: "stale"}},
