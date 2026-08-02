@@ -49,13 +49,17 @@ func (f *fakeSearcher) Search(_ context.Context, _ string, _ int) ([]websearch.S
 }
 
 type fakeLLM struct {
-	resp  any
-	err   error
-	calls int
+	resp       any
+	err        error
+	calls      int
+	lastPrompt string
 }
 
-func (f *fakeLLM) ChatJSON(_ context.Context, _ []llm.Message, out any) error {
+func (f *fakeLLM) ChatJSON(_ context.Context, msgs []llm.Message, out any) error {
 	f.calls++
+	if len(msgs) > 0 {
+		f.lastPrompt = msgs[0].Content
+	}
 	if f.err != nil {
 		return f.err
 	}
@@ -382,6 +386,31 @@ func TestTagsToolEmptyOK(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("empty output")
+	}
+}
+
+func TestReviewToolInjectsTagsSourcesAndLinkCount(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertPage(ctx, store.Page{ID: "postgresql-page", AgentID: "agent-a", Title: "PostgreSQL",
+		BodyMD: "PostgreSQL 作为默认数据库", Status: "active", Tags: []string{"database"}, Sources: []string{"https://x.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpsertEdge(ctx, "agent-a", store.Edge{SourceID: "postgresql-page", TargetID: "x", Kind: store.EdgeRelated, Weight: 1})
+	_ = deps.Vec.Upsert(ctx, vec.Entry{ID: "postgresql-page", AgentID: "agent-a", Kind: "wiki_page",
+		Metadata: map[string]string{"title": "PostgreSQL", "body": "PostgreSQL 作为默认数据库"}})
+	l := &fakeLLM{resp: map[string]any{"summary": "ok", "suggestions": []any{}}}
+	deps.LLM = l
+
+	tool := NewReviewTool(deps, "agent-a")
+	// Draft without any wikilink.
+	if _, err := tool.Execute(types.Context{}, types.ArgsMap{"draft": "PostgreSQL 作为默认数据库"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"database", "https://x.example", "Draft contains 0 [[wikilink]]s"} {
+		if !strings.Contains(l.lastPrompt, want) {
+			t.Errorf("prompt missing %q\n---\n%s", want, l.lastPrompt)
+		}
 	}
 }
 

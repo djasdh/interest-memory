@@ -74,13 +74,22 @@ func reviewDraft(ctx context.Context, deps ToolsDeps, agentID, draft, pageID str
 	b.WriteString("You are a wiki reviewer. Review the draft below against existing wiki pages and return suggestions the writer should consider. Only point out real issues: contradictions, near-duplicates, stale references to superseded pages, and concrete improvements. Be concise.\n\n")
 	b.WriteString("## Draft to write\n\n")
 	b.WriteString(draft)
+	linkCount := len(ExtractWikilinks(draft))
+	b.WriteString(fmt.Sprintf("\n\n(Draft contains %d [[wikilink]]s. Fewer than 2 outbound links makes the page disconnected from the wiki graph — suggest adding links when appropriate.)\n", linkCount))
 	if pageID != "" {
-		b.WriteString(fmt.Sprintf("\n\n(Target page id: %s — an update to an existing page.)\n", pageID))
+		b.WriteString(fmt.Sprintf("\n(Target page id: %s — an update to an existing page.)\n", pageID))
 	}
 	if len(relevant) > 0 {
 		b.WriteString("\n## Relevant existing wiki pages\n\n")
 		for i, r := range relevant {
-			b.WriteString(fmt.Sprintf("%d. [%s] %s (status=%s)\n   %s\n", i+1, r.ID, r.Title, r.Status, truncate(r.BodyMD, 400)))
+			b.WriteString(fmt.Sprintf("%d. [%s] %s (status=%s)\n", i+1, r.ID, r.Title, r.Status))
+			if len(r.Tags) > 0 {
+				b.WriteString(fmt.Sprintf("   Tags: %s\n", strings.Join(r.Tags, ", ")))
+			}
+			if len(r.Sources) > 0 {
+				b.WriteString(fmt.Sprintf("   Sources: %s\n", strings.Join(r.Sources, ", ")))
+			}
+			b.WriteString(fmt.Sprintf("   %s\n", truncate(r.BodyMD, 400)))
 		}
 	} else {
 		b.WriteString("\n(No closely related existing pages found.)\n")
@@ -112,7 +121,7 @@ func relatedPages(ctx context.Context, deps ToolsDeps, agentID, draft, pageID st
 	var out []storePage
 	if pageID != "" {
 		if p, err := deps.Store.GetPage(ctx, agentID, pageID); err == nil && p != nil {
-			out = append(out, storePage{ID: p.ID, Title: p.Title, BodyMD: p.BodyMD, Status: p.Status})
+			out = append(out, storePage{ID: p.ID, Title: p.Title, BodyMD: p.BodyMD, Status: p.Status, Tags: p.Tags, Sources: p.Sources})
 			seen[p.ID] = true
 		}
 	}
@@ -132,15 +141,17 @@ func relatedPages(ctx context.Context, deps ToolsDeps, agentID, draft, pageID st
 		if err != nil || p == nil {
 			continue
 		}
-		out = append(out, storePage{ID: p.ID, Title: p.Title, BodyMD: p.BodyMD, Status: p.Status})
+		out = append(out, storePage{ID: p.ID, Title: p.Title, BodyMD: p.BodyMD, Status: p.Status, Tags: p.Tags, Sources: p.Sources})
 	}
 	return out
 }
 
 // storePage is a lightweight page projection for review prompts.
 type storePage struct {
-	ID     string
-	Title  string
-	BodyMD string
-	Status string
+	ID      string
+	Title   string
+	BodyMD  string
+	Status  string
+	Tags    []string
+	Sources []string
 }
