@@ -425,13 +425,20 @@ Also [[page-b]] again.
 }
 
 func TestBuildCompilePrompt(t *testing.T) {
-	pts := []store.InterestPoint{{Name: "Go concurrency", Summary: "use goroutines", Keywords: []string{"go"}}}
-	prompt := buildCompilePrompt(pts, nil)
-	if prompt == "" || prompt == "(wiki: no relevant articles found)" {
+	prompt := buildPointPrompt(store.InterestPoint{
+		Name: "Go concurrency", Summary: "use goroutines", Keywords: []string{"go"},
+		Subjective:  false,
+		TurnRange:   [2]int{0, 0},
+		Reliability: store.Reliability{Confidence: 0.9, Status: "supported"},
+	}, "", "")
+	if prompt == "" {
 		t.Fatal("empty prompt")
 	}
 	if !contains(prompt, "Go concurrency") {
 		t.Errorf("prompt missing topic: %s", prompt)
+	}
+	if !contains(prompt, "verify_claims") {
+		t.Errorf("prompt should instruct web audit for objective claims: %s", prompt)
 	}
 }
 

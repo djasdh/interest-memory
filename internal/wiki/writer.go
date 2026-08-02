@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
-	"interest-memory/internal/transcript"
 
 	"my-agent-core/agent"
 	"my-agent-core/provider"
@@ -16,8 +16,10 @@ import (
 
 // Compiler is the domain interface (design §七): write wiki pages from
 // interest points + transcript via the agent loop, then rebuild edges.
+// Compile returns the ids of pages touched this run (new/updated) so the
+// caller can reconcile related pages.
 type Compiler interface {
-	Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) error
+	Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error)
 	RebuildEdges(ctx context.Context, agentID string) error
 }
 
@@ -25,98 +27,219 @@ type Compiler interface {
 // WikiWriter agent loop). Returns nil when the LLM is not configured.
 type ProviderFactory func(ctx context.Context) (*provider.Provider, error)
 
-// Writer runs the SQLite-backed WikiWriter: it spawns a my-agent-core agent
-// armed with wiki_query / wiki_write tools to persist knowledge (design §五
-// step 6 — all writes go through the agent loop).
+// loopRunner executes one wiki agent loop. Injected for tests; production
+// uses defaultRunLoop.
+type loopRunner func(ctx context.Context, p *provider.Provider, system string, tools []types.Tool, prompt types.Message, emit types.EventSink) error
+
+// Writer runs the SQLite-backed WikiWriter: for each interest point it spawns
+// a dedicated my-agent-core agent armed with wiki_query / verify_claims /
+// review / wiki_write tools to persist knowledge (single-point + evidence +
+// conversation, serial loops).
 type Writer struct {
 	deps   ToolsDeps
 	prov   ProviderFactory
 	system string
 	timeout time.Duration
+	runLoop loopRunner
 }
 
-// NewWriter builds a Writer. deps carries store/vec/embedder; prov builds
-// the LLM provider lazily per call so tests can inject a fake.
+// NewWriter builds a Writer. deps carries store/vec/embedder/llm/searcher;
+// prov builds the LLM provider lazily per call so tests can inject a fake.
 func NewWriter(deps ToolsDeps, prov ProviderFactory) *Writer {
 	return &Writer{
 		deps: deps,
 		prov: prov,
-		system: `你是一个 wiki 编辑助手。你的任务是根据兴趣点和会话记录，将有用的知识写入 SQLite wiki。
-规则：
-- 使用 wiki_query 工具先检查是否已有相关页面；已有则更新而非新建
-- 每个兴趣点写一个 concept 页面（title 用兴趣点主题，content 用 markdown，可含 [[wikilink]] 双链指向相关页）
-- 会话支撑材料写 source 页面（page_type=source，session_ids 填来源会话）
-- 多兴趣点的综合摘要写 synthesis 页面
-- 添加合适的 tags
-- 输出简洁准确，不要写无意义内容`,
+		system: `你是一个 wiki 编辑助手。你为单个兴趣点撰写或更新一个 wiki 页面。
+流程（必须遵守）：
+1. 用 wiki_query 检查是否已有相关页面；已有则用其 id 更新，而非新建
+2. 撰写页面内容（markdown，可含 [[wikilink]] 双链指向相关页）
+3. 对客观事实声明，用 verify_claims 联网核查后再写入
+4. 正式写入前，必须调用 review 工具审查 draft，采纳合理建议
+5. 用 wiki_write 写入：page_type=concept，传 interest_point_id（本兴趣点 id），
+   提供恰当的 tags、edges、claims
+6. 输出简洁准确，不要写无意义内容`,
 		timeout: 10 * time.Minute,
+		runLoop: defaultRunLoop,
 	}
 }
 
-// Compile writes wiki pages from interest points + compressed transcript via
-// the agent loop (design §五 steps 5-6).
-func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) error {
-	if w.prov == nil {
-		return nil
-	}
-	p, err := w.prov(ctx)
-	if err != nil || p == nil {
-		return fmt.Errorf("wiki: provider: %w", err)
-	}
-	if len(pts) == 0 {
-		return nil
-	}
-
-	compressed := transcript.Compress(msgs)
-	prompt := buildCompilePrompt(pts, compressed)
+func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, tools []types.Tool, prompt types.Message, emit types.EventSink) error {
 	ag := agent.NewAgent(p)
-	ag.SystemPrompt = w.system
-	ag.Tools = []types.Tool{
-		NewQueryTool(w.deps, agentID),
-		NewWriteTool(w.deps, agentID),
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, w.timeout)
-	defer cancel()
-	_, err = ag.Prompt(types.Message{Role: types.RoleUser, Text: prompt}, nil, func(types.Event) {}, ctx.Done())
+	ag.SystemPrompt = system
+	ag.Tools = tools
+	_, err := ag.Prompt(prompt, nil, emit, ctx.Done())
 	return err
 }
 
-func buildCompilePrompt(pts []store.InterestPoint, msgs []types.Message) string {
+// toolsFor builds the per-point tool set.
+func (w *Writer) toolsFor(agentID string) []types.Tool {
+	return []types.Tool{
+		NewQueryTool(w.deps, agentID),
+		NewVerifyClaimsTool(w.deps),
+		NewReviewTool(w.deps, agentID),
+		NewWriteTool(w.deps, agentID),
+	}
+}
+
+// Compile writes one wiki page per interest point via a dedicated agent loop
+// (serial, no parallelism — avoids write races). Each point's prompt carries
+// its evidence, the exact conversation segment (by TurnRange), and a
+// pre-looked-up related-page summary. Returns the page ids touched this run.
+func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error) {
+	if w.prov == nil {
+		return nil, nil
+	}
+	p, err := w.prov(ctx)
+	if err != nil || p == nil {
+		return nil, fmt.Errorf("wiki: provider: %w", err)
+	}
+	if len(pts) == 0 {
+		return nil, nil
+	}
+
+	tools := w.toolsFor(agentID)
+	var touched []string
+	for _, ip := range pts {
+		related := prelookupRelated(ctx, w.deps, agentID, ip)
+		dialog := dialogSegment(msgs, ip.TurnRange)
+		prompt := buildPointPrompt(ip, dialog, related)
+
+		loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
+		err := w.runLoop(loopCtx, p, w.system, tools, types.Message{Role: types.RoleUser, Text: prompt}, func(ev types.Event) {
+			if ev.Type == "tool_execution_end" && ev.ToolName == "wiki_write" {
+				if id, ok := ev.Args["id"].(string); ok && id != "" {
+					touched = append(touched, id)
+				}
+			}
+		})
+		cancel()
+		if err != nil {
+			return touched, fmt.Errorf("wiki: point %q: %w", ip.Name, err)
+		}
+	}
+	return touched, nil
+}
+
+// buildPointPrompt renders one interest point's write prompt: the point
+// (name/summary/keywords/reliability/subjective/evidence), the exact dialog
+// segment backing it, and the pre-looked-up related page summary.
+func buildPointPrompt(ip store.InterestPoint, dialog, related string) string {
 	var b strings.Builder
-	b.WriteString("根据以下兴趣点和会话记录，为 wiki 撰写或更新文章。\n\n")
-
-	b.WriteString("## 兴趣点\n\n")
-	for i, ip := range pts {
-		b.WriteString(fmt.Sprintf("%d. 主题: %s\n", i+1, ip.Name))
-		if ip.Summary != "" {
-			b.WriteString(fmt.Sprintf("   摘要: %s\n", truncate(ip.Summary, 500)))
-		}
-		if len(ip.Keywords) > 0 {
-			b.WriteString(fmt.Sprintf("   标签: %s\n", strings.Join(ip.Keywords, ", ")))
-		}
-		if ip.Reliability.Status != "" {
-			b.WriteString(fmt.Sprintf("   可信度: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))
-		}
-		if len(ip.SourceSessions) > 0 {
-			b.WriteString(fmt.Sprintf("   来源会话: %s\n", strings.Join(ip.SourceSessions, ", ")))
+	b.WriteString("请为下面的兴趣点撰写或更新一个 wiki 页面。\n\n")
+	b.WriteString("## 兴趣点\n")
+	b.WriteString(fmt.Sprintf("- 主题: %s\n", ip.Name))
+	if ip.Summary != "" {
+		b.WriteString(fmt.Sprintf("- 摘要: %s\n", truncate(ip.Summary, 500)))
+	}
+	if len(ip.Keywords) > 0 {
+		b.WriteString(fmt.Sprintf("- 标签: %s\n", strings.Join(ip.Keywords, ", ")))
+	}
+	if ip.Subjective {
+		b.WriteString("- 主观性: 是（用户个人偏好/观点）——无需联网核查事实\n")
+	} else {
+		b.WriteString("- 主观性: 否（客观事实声明）——写入前用 verify_claims 联网核查\n")
+	}
+	if ip.Reliability.Status != "" {
+		b.WriteString(fmt.Sprintf("- 可信度: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))
+	}
+	if len(ip.Reliability.Evidence) > 0 {
+		b.WriteString("\n## 证据（写 claims 时引用来源）\n")
+		for _, e := range ip.Reliability.Evidence {
+			loc := e.SourceID
+			if e.URL != "" {
+				loc = e.URL
+			}
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Kind, truncate(loc, 200)))
+			if e.Excerpt != "" {
+				b.WriteString(fmt.Sprintf("  引用: %s\n", truncate(e.Excerpt, 200)))
+			}
 		}
 	}
+	if dialog != "" {
+		b.WriteString("\n## 对应对话片段（来源轮次）\n")
+		b.WriteString(dialog)
+	}
+	if related != "" {
+		b.WriteString("\n## 已存在的相关页面（优先更新而非新建）\n")
+		b.WriteString(related)
+	}
+	b.WriteString("\n请按规则：wiki_query → draft → verify_claims（客观声明）→ review → wiki_write（带 interest_point_id）。\n")
+	return b.String()
+}
 
-	b.WriteString("\n## 会话记录（已压缩）\n\n")
+// dialogSegment extracts the exact conversation segment backing an interest
+// point, by its global message-index TurnRange (as mapped by fork).
+func dialogSegment(msgs []types.Message, tr [2]int) string {
+	if tr == [2]int{0, 0} {
+		return ""
+	}
+	var llmMsgs []llm.Message
 	for _, m := range msgs {
+		llmMsgs = append(llmMsgs, toLLM(m))
+	}
+	s, e := tr[0], tr[1]
+	if s < 0 {
+		s = 0
+	}
+	if e >= len(llmMsgs) {
+		e = len(llmMsgs) - 1
+	}
+	if s > e || s >= len(llmMsgs) {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range llmMsgs[s : e+1] {
+		text := strings.TrimSpace(m.Content)
+		if text == "" {
+			continue
+		}
 		switch m.Role {
-		case types.RoleUser:
-			b.WriteString(fmt.Sprintf("USER: %s\n", truncate(m.Text, 400)))
-		case types.RoleAssistant:
-			b.WriteString(fmt.Sprintf("ASSISTANT: %s\n", truncate(m.Text, 300)))
-		case types.RoleToolResult:
-			b.WriteString(fmt.Sprintf("TOOL(%s): %s\n", m.ToolName, truncate(m.Text, 150)))
+		case "user":
+			b.WriteString("[USER]: " + truncate(text, 400) + "\n")
+		case "assistant":
+			b.WriteString("[ASSISTANT]: " + truncate(text, 300) + "\n")
 		}
 	}
+	return b.String()
+}
 
-	b.WriteString("\n请先用 wiki_query 检查相关文章，然后使用 wiki_write 创建或更新页面。\n")
-	b.WriteString("对每个兴趣点，用 wiki_write 写入一个 concept 页；将会话摘要写入 source 页；需要时写 synthesis 页。\n")
+func toLLM(m types.Message) llm.Message {
+	role := "user"
+	switch m.Role {
+	case types.RoleAssistant:
+		role = "assistant"
+	case types.RoleToolResult:
+		role = "tool"
+	}
+	return llm.Message{Role: role, Content: m.Text}
+}
+
+// prelookupRelated semantically searches the most relevant existing wiki page
+// for the interest point and renders a compact summary the agent must use to
+// update rather than duplicate.
+func prelookupRelated(ctx context.Context, deps ToolsDeps, agentID string, ip store.InterestPoint) string {
+	q := ip.Name
+	if ip.Summary != "" {
+		q += " " + ip.Summary
+	}
+	hits, err := semanticSearch(ctx, deps, agentID, q, 3)
+	if err != nil || len(hits) == 0 {
+		kw, kerr := keywordSearch(ctx, deps, agentID, q, 3)
+		if kerr == nil && len(kw) > 0 {
+			hits = kw
+		}
+	}
+	if len(hits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, h := range hits {
+		b.WriteString(fmt.Sprintf("=== %s (score %.2f) [%s] ===\n", titleOf(h), h.Score, h.Kind))
+		b.WriteString(fmt.Sprintf("ID: %s\n", h.ID))
+		if body, ok := h.Meta["body"]; ok && body != "" {
+			b.WriteString(fmt.Sprintf("Preview: %s\n", truncate(body, 300)))
+		}
+	}
 	return b.String()
 }
 

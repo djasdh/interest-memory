@@ -116,14 +116,17 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		return fmt.Errorf("service: flag contradictions: %w", err)
 	}
 
-	// 5-6. wiki: compress + agent-loop write
-	if err := s.wiki.Compile(ctx, agentID, pts, msgs); err != nil {
+	// 5-6. wiki: per-interest-point agent-loop write (touched page ids feed
+	// the reconcile stage).
+	touched, err := s.wiki.Compile(ctx, agentID, pts, msgs)
+	if err != nil {
 		return fmt.Errorf("service: wiki compile: %w", err)
 	}
 	// 7. rebuild adjacency from wikilinks
 	if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
 		return fmt.Errorf("service: rebuild edges: %w", err)
 	}
+	_ = touched // consumed by Reconcile (stage 9)
 	return nil
 }
 
