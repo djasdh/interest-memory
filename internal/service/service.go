@@ -57,6 +57,8 @@ func New(
 	wikiProv := func(context.Context) (*provider.Provider, error) {
 		return buildWikiProvider(cfg), nil
 	}
+	// Change-log retention default from config (0 = unlimited).
+	_ = st.SetLogRetainDefault(context.Background(), cfg.Log.Retain)
 
 	return &Service{
 		cfg:      cfg,

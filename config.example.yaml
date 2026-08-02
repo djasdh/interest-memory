@@ -50,3 +50,7 @@ recall:
 search:
   top_k: 3                    # 语义检索默认返回数
   max_body_len: 4000          # 正文/摘要截断上限（claims/evidence/边不截断）
+
+# 改动日志（change_log）
+log:
+  retain: 0                   # 每 agent 保留日志条数上限（0=无限增长）

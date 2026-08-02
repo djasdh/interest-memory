@@ -53,6 +53,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Search.TopK != 3 || cfg.Search.MaxBodyLen != 4000 {
 		t.Errorf("default search = %+v, want TopK=3 MaxBodyLen=4000", cfg.Search)
 	}
+	if cfg.Log.Retain != 0 {
+		t.Errorf("default log.retain = %d, want 0 (unlimited)", cfg.Log.Retain)
+	}
 }
 
 func TestLoadFileOverrides(t *testing.T) {

@@ -74,6 +74,8 @@ wiki:
 search:
   top_k: 3
   max_body_len: 4000
+log:
+  retain: 0
 recall:
   top_k: 8
   include_wiki: true

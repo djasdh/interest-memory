@@ -17,7 +17,13 @@ type Config struct {
 	Verify    VerifyConfig    `yaml:"verify"`
 	Wiki      WikiConfig      `yaml:"wiki"`
 	Search    SearchConfig    `yaml:"search"`
+	Log       LogConfig       `yaml:"log"`
 	Recall    RecallConfig    `yaml:"recall"`
+}
+
+// LogConfig controls the change-log retention.
+type LogConfig struct {
+	Retain int `yaml:"retain"` // 每 agent 保留日志条数上限（0=无限增长）
 }
 
 // SearchConfig controls the consumer-side memory_search tool.
@@ -120,6 +126,9 @@ func Default() Config {
 		Search: SearchConfig{
 			TopK:       3,
 			MaxBodyLen: 4000,
+		},
+		Log: LogConfig{
+			Retain: 0,
 		},
 		Recall: RecallConfig{
 			TopK:        8,

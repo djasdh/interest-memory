@@ -48,6 +48,7 @@ type Store interface {
 	AppendLog(ctx context.Context, l ChangeLog) error
 	ListLogs(ctx context.Context, agentID string, limit, offset int) ([]ChangeLog, error)
 	SetLogRetain(ctx context.Context, agentID string, n int) error
+	SetLogRetainDefault(ctx context.Context, n int) error
 
 	Close() error
 }

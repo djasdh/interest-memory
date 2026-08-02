@@ -7,8 +7,12 @@ import (
 )
 
 // logRetain tracks the optional per-agent cap on retained log entries
-// (0 = unlimited). Guarded by the store's writeMu.
-var logRetain = map[string]int{}
+// (0 = unlimited). logRetainDefault is the global default applied to agents
+// without an explicit cap. Guarded by the store's writeMu.
+var (
+	logRetain        = map[string]int{}
+	logRetainDefault int
+)
 
 // AppendLog records one structural change. When a per-agent retain cap is
 // set (SetLogRetain > 0), the oldest entries beyond the cap are pruned.
@@ -87,11 +91,51 @@ func (s *SQLiteStore) SetLogRetain(ctx context.Context, agentID string, n int) e
 	return s.pruneLogsLocked(ctx, agentID)
 }
 
-// pruneLogsLocked deletes the oldest entries beyond the retain cap. Caller
-// must hold the agent write lock.
+// SetLogRetainDefault sets the global default retention cap applied to
+// agents without an explicit per-agent cap (0 = unlimited).
+func (s *SQLiteStore) SetLogRetainDefault(ctx context.Context, n int) error {
+	s.writeMu.Lock()
+	logRetainDefault = n
+	s.writeMu.Unlock()
+	if n <= 0 {
+		return nil
+	}
+	// Prune all agents using the default cap.
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT agent_id FROM change_log`)
+	if err != nil {
+		return err
+	}
+	var agents []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			rows.Close()
+			return err
+		}
+		agents = append(agents, a)
+	}
+	rows.Close()
+	for _, a := range agents {
+		lock := s.agentLock(a)
+		lock.Lock()
+		err := s.pruneLogsLocked(ctx, a)
+		lock.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneLogsLocked deletes the oldest entries beyond the retention cap
+// (per-agent cap, falling back to the global default). Caller must hold the
+// agent write lock.
 func (s *SQLiteStore) pruneLogsLocked(ctx context.Context, agentID string) error {
 	s.writeMu.Lock()
 	cap := logRetain[agentID]
+	if cap <= 0 {
+		cap = logRetainDefault
+	}
 	s.writeMu.Unlock()
 	if cap <= 0 {
 		return nil

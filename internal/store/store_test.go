@@ -181,6 +181,28 @@ func TestChangeLogRetainCaps(t *testing.T) {
 	}
 }
 
+func TestChangeLogRetainDefault(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	// Clear any per-agent cap left by earlier tests (global map).
+	_ = s.SetLogRetain(ctx, "a", 0)
+	if err := s.SetLogRetainDefault(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := s.AppendLog(ctx, ChangeLog{ID: fmt.Sprintf("d%d", i), AgentID: "a", EntityID: "e", Title: "t", Action: "update"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListLogs(ctx, "a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("logs = %d, want 2 (default retain)", len(got))
+	}
+}
+
 func idsOfLogs(logs []ChangeLog) []string {
 	out := make([]string, len(logs))
 	for i, l := range logs {
