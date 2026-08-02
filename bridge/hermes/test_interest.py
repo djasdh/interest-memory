@@ -182,9 +182,10 @@ class ProviderTest(unittest.TestCase):
 
     def test_get_tool_schemas_exposes_memory_search(self):
         schemas = self.p.get_tool_schemas()
-        self.assertEqual(len(schemas), 1)
-        s = schemas[0]
-        self.assertEqual(s["name"], "memory_search")
+        names = {s["name"] for s in schemas}
+        self.assertIn("memory_search", names)
+        self.assertIn("memory_logs", names)
+        s = next(s for s in schemas if s["name"] == "memory_search")
         self.assertIn("parameters", s)
         self.assertIn("query", s["parameters"]["properties"])
         self.assertIn("id", s["parameters"]["properties"])
@@ -238,6 +239,31 @@ class ProviderTest(unittest.TestCase):
         self.p.initialize("s1")
         with self.assertRaises(NotImplementedError):
             self.p.handle_tool_call("nope", {})
+
+    # -- memory_logs tool ----------------------------------------------------
+
+    def test_handle_tool_call_logs(self):
+        self.p.initialize("s1")
+        with mock.patch("requests.get") as get:
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "items": [{"id": "l1", "action": "create", "title": "P1",
+                           "edges": [{"action": "add", "kind": "has_page"}]}]
+            }
+            get.return_value = resp
+            out = self.p.handle_tool_call("memory_logs", {"limit": 5})
+        params = get.call_args[1].get("params", {})
+        self.assertEqual(params.get("limit"), 5)
+        self.assertEqual(params.get("offset"), 0)
+        items = json.loads(out)
+        self.assertEqual(items[0]["id"], "l1")
+
+    def test_handle_tool_call_logs_failure_isolated(self):
+        self.p.initialize("s1")
+        with mock.patch("requests.get", side_effect=RuntimeError("boom")):
+            out = self.p.handle_tool_call("memory_logs", {})
+        self.assertIn("error", json.loads(out))
 
 
 if __name__ == "__main__":

@@ -217,11 +217,34 @@ class InterestMemoryProvider(MemoryProvider):
                         },
                     },
                 },
-            }
+            },
+            {
+                "name": "memory_logs",
+                "description": (
+                    "Query the change-log of the interest-memory knowledge base: "
+                    "recent structural changes (page/interest-point title, action, "
+                    "and edges touched), newest first."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "number",
+                            "description": "Max log entries to return (default 10)",
+                        },
+                        "offset": {
+                            "type": "number",
+                            "description": "Pagination offset (default 0)",
+                        },
+                    },
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         """Dispatch a memory provider tool call. Returns a JSON string."""
+        if tool_name == "memory_logs":
+            return self._memory_logs(args)
         if tool_name != "memory_search":
             raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
         query = str(args.get("query") or "")
@@ -248,6 +271,27 @@ class InterestMemoryProvider(MemoryProvider):
             return json.dumps(resp.json().get("items", []), ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": f"memory_search: {exc}"}, ensure_ascii=False)
+
+    def _memory_logs(self, args: Dict[str, Any]) -> str:
+        """memory_logs: query recent change logs (newest first)."""
+        try:
+            limit = int(args.get("limit") or 10)
+            offset = int(args.get("offset") or 0)
+        except (TypeError, ValueError):
+            limit, offset = 10, 0
+        if limit < 0:
+            limit = 10
+        if offset < 0:
+            offset = 0
+        try:
+            import requests
+            url = f"{self._base_url}/api/v1/{self._agent_id}/logs"
+            resp = requests.get(url, params={"limit": limit, "offset": offset}, timeout=self._timeout)
+            if resp.status_code != 200:
+                return json.dumps({"error": f"memory_logs: status {resp.status_code}"}, ensure_ascii=False)
+            return json.dumps(resp.json().get("items", []), ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"error": f"memory_logs: {exc}"}, ensure_ascii=False)
 
 
 def _extract_turns(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
