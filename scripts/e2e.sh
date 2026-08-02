@@ -122,8 +122,9 @@ JOB_ID=$(printf '%s' "$RESP" | python3 -c 'import sys,json;print(json.load(sys.s
 log "job_id=$JOB_ID"
 
 # ---- 6. poll job ------------------------------------------------------------
+POLL_TIMES="${IM_E2E_POLL_TIMES:-90}"   # ×2s = default 180s; longer pipelines override
 STATUS="queued"
-for _ in $(seq 1 90); do
+for _ in $(seq 1 "$POLL_TIMES"); do
   JOB=$(curl -sf "$BASE/api/v1/agent-a/jobs/$JOB_ID" || echo '{"status":"lost"}')
   STATUS=$(printf '%s' "$JOB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))')
   if [[ "$STATUS" == "done" ]]; then
