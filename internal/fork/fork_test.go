@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 
 	"interest-memory/internal/config"
@@ -11,15 +12,19 @@ import (
 )
 
 // mockLLM implements LLM by capturing the prompt and returning canned
-// candidates (or an error).
+// candidates (or an error). Thread-safe: Analyze runs windows concurrently.
 type mockLLM struct {
-	prompt   string
-	cands    []Candidate
-	chatErr  error
-	callN    int
+	mu      sync.Mutex
+	prompt  string
+	cands   []Candidate      // returned when perCall is empty
+	perCall [][]Candidate    // consumed in order, one per ChatJSON call
+	chatErr error
+	callN   int
 }
 
 func (m *mockLLM) ChatJSON(_ context.Context, messages []llm.Message, out any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.callN++
 	if len(messages) > 0 {
 		m.prompt = messages[0].Content
@@ -27,7 +32,14 @@ func (m *mockLLM) ChatJSON(_ context.Context, messages []llm.Message, out any) e
 	if m.chatErr != nil {
 		return m.chatErr
 	}
-	*(out.(*[]Candidate)) = m.cands
+	var cs []Candidate
+	if len(m.perCall) > 0 {
+		cs = m.perCall[0]
+		m.perCall = m.perCall[1:]
+	} else {
+		cs = m.cands
+	}
+	*(out.(*[]Candidate)) = cs
 	return nil
 }
 
@@ -37,6 +49,20 @@ func turnsFrom(contents ...string) []llm.Message {
 		out = append(out, llm.Message{Role: "user", Content: c})
 	}
 	return out
+}
+
+// mixTurns interleaves assistant messages so tests exercise user-turn counting.
+func mixTurns(userContents ...string) []llm.Message {
+	var out []llm.Message
+	for _, c := range userContents {
+		out = append(out, llm.Message{Role: "user", Content: c})
+		out = append(out, llm.Message{Role: "assistant", Content: "reply " + c})
+	}
+	return out
+}
+
+func analyzeCfg() config.ForkConfig {
+	return config.ForkConfig{PrefixStep: 5, MaxWindows: 8, MaxConcurrency: 4}
 }
 
 func TestSplitWindows(t *testing.T) {
@@ -91,13 +117,145 @@ func TestSplitWindowsZeroFallbackSize(t *testing.T) {
 	}
 }
 
+func TestSplitPrefixWindowsByUserTurns(t *testing.T) {
+	// 3 user turns < step 5 → single full window, no split.
+	short := mixTurns("a", "b", "c")
+	got := SplitPrefixWindows(short, 5, 8)
+	if len(got) != 1 {
+		t.Fatalf("short transcript windows = %d, want 1 (no split)", len(got))
+	}
+	if !reflect.DeepEqual(got[0], short) {
+		t.Error("short transcript window should be the full input")
+	}
+
+	// 12 user turns, step 5 → [..pos5], [..pos10], full (assistant msgs don't count).
+	msgs := mixTurns("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l")
+	got = SplitPrefixWindows(msgs, 5, 8)
+	if len(got) != 3 {
+		t.Fatalf("windows = %d, want 3", len(got))
+	}
+	// pos5 = index 8 (a@0, reply, b@2, ... e@8); pos10 = index 18.
+	if len(got[0]) != 9 || len(got[1]) != 19 || len(got[2]) != len(msgs) {
+		t.Errorf("window sizes = [%d, %d, %d], want [9, 19, %d]",
+			len(got[0]), len(got[1]), len(got[2]), len(msgs))
+	}
+	// Each window is a strict prefix of the next.
+	for i := 1; i < len(got); i++ {
+		if !reflect.DeepEqual(got[i-1], got[i][:len(got[i-1])]) {
+			t.Errorf("window %d is not a prefix of window %d", i-1, i)
+		}
+	}
+}
+
+func TestSplitPrefixWindowsMaxWindows(t *testing.T) {
+	msgs := mixTurns("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l")
+	got := SplitPrefixWindows(msgs, 5, 2) // cap at 2 longest
+	if len(got) != 2 {
+		t.Fatalf("windows = %d, want 2 (capped)", len(got))
+	}
+	// Longest 2 windows: [..pos10] and full.
+	if len(got[0]) != 19 || len(got[1]) != len(msgs) {
+		t.Errorf("capped window sizes = [%d, %d], want [19, %d]", len(got[0]), len(got[1]), len(msgs))
+	}
+}
+
+func TestSplitPrefixWindowsNoUserTurns(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "assistant", Content: "a"},
+		{Role: "assistant", Content: "b"},
+		{Role: "assistant", Content: "c"},
+	}
+	got := SplitPrefixWindows(msgs, 5, 8)
+	if len(got) != 1 {
+		t.Fatalf("windows = %d, want 1 (no user turns)", len(got))
+	}
+	if !reflect.DeepEqual(got[0], msgs) {
+		t.Error("should be a single full window")
+	}
+}
+
+func TestSplitPrefixWindowsEmpty(t *testing.T) {
+	if got := SplitPrefixWindows(nil, 5, 8); got != nil {
+		t.Errorf("nil input windows = %v, want nil", got)
+	}
+	if got := SplitPrefixWindows([]llm.Message{}, 5, 8); got != nil {
+		t.Errorf("empty input windows = %v, want nil", got)
+	}
+}
+
+func TestDedupe(t *testing.T) {
+	in := []Candidate{
+		{Topic: "PostgreSQL", Confidence: 0.9, Tags: []string{"db"}, TurnRange: [2]int{1, 2}},
+		{Topic: "postgresql", Confidence: 0.7, Tags: []string{"db", "sql"}, TurnRange: [2]int{3, 4}},
+		{Topic: "Go 并发", Confidence: 0.8, TurnRange: [2]int{2, 2}},
+	}
+	got := dedupe(in)
+	if len(got) != 2 {
+		t.Fatalf("dedupe = %d, want 2 (postgresql merged)", len(got))
+	}
+	first := got[0]
+	if first.Confidence != 0.9 {
+		t.Errorf("merged confidence = %f, want 0.9 (highest)", first.Confidence)
+	}
+	if first.TurnRange != [2]int{1, 4} {
+		t.Errorf("merged turn_range = %v, want [1 4]", first.TurnRange)
+	}
+	if len(first.Tags) < 2 {
+		t.Errorf("merged tags = %v, want combined", first.Tags)
+	}
+}
+
+func TestExtractParsesSubjective(t *testing.T) {
+	// mockLLM returns Candidate with Subjective set — proves the JSON round-trip
+	// and that Analyze passes it through.
+	m := &mockLLM{cands: []Candidate{
+		{Topic: "喜欢 Go", Confidence: 0.9, Subjective: true},
+		{Topic: "Go 1.24 特性", Confidence: 0.8, Subjective: false},
+	}}
+	a := NewAnalyzer(m, analyzeCfg())
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(got))
+	}
+	if !got[0].Subjective || got[1].Subjective {
+		t.Errorf("subjective flags = %v/%v, want true/false", got[0].Subjective, got[1].Subjective)
+	}
+	// Prompt should ask the model to judge subjectivity.
+	if !contains(m.prompt, "subjective") {
+		t.Error("prompt should mention subjective judgment")
+	}
+}
+
+func TestAnalyzeDedupesAcrossWindows(t *testing.T) {
+	// Same topic surfaced by every prefix window merges into one candidate.
+	m := &mockLLM{cands: []Candidate{{Topic: "dup", Confidence: 0.9}}}
+	a := NewAnalyzer(m, analyzeCfg())
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+		turnsFrom("one"),
+		turnsFrom("two"),
+		turnsFrom("three"),
+	})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1 (deduped across windows)", len(got))
+	}
+	if m.callN != 3 {
+		t.Errorf("LLM calls = %d, want 3 (all windows still analyzed)", m.callN)
+	}
+}
+
 func TestAnalyzeFiltersLowConfidence(t *testing.T) {
 	m := &mockLLM{cands: []Candidate{
 		{Topic: "keep", Confidence: 0.9},
 		{Topic: "drop-low", Confidence: 0.2},
 		{Topic: "keep-edge", Confidence: 0.3}, // boundary ≥ min(0.3)
 	}}
-	a := NewAnalyzer(m, config.ForkConfig{WindowTurns: 10, MinConfidence: 0.3})
+	a := NewAnalyzer(m, analyzeCfg())
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
@@ -117,8 +275,12 @@ func TestAnalyzeFiltersLowConfidence(t *testing.T) {
 }
 
 func TestAnalyzeMergesAcrossWindows(t *testing.T) {
-	m := &mockLLM{cands: []Candidate{{Topic: "w1", Confidence: 0.9}}}
-	a := NewAnalyzer(m, config.ForkConfig{WindowTurns: 10})
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "w1", Confidence: 0.9}},
+		{{Topic: "w2", Confidence: 0.9}},
+		{{Topic: "w3", Confidence: 0.9}},
+	}}
+	a := NewAnalyzer(m, analyzeCfg())
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
@@ -136,12 +298,17 @@ func TestAnalyzeMergesAcrossWindows(t *testing.T) {
 }
 
 func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
-	// max_candidates_per_window=1 → each window keeps at most its top candidate.
-	m := &mockLLM{cands: []Candidate{
-		{Topic: "a", Confidence: 0.9},
-		{Topic: "b", Confidence: 0.8},
+	// max_candidates_per_window=1 → each window keeps at most its top
+	// candidate. Distinct topics per window so dedupe does not merge them.
+	// Concurrent consumption order of perCall is not guaranteed, so assert on
+	// the candidate count and set rather than window↔topic mapping.
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "a", Confidence: 0.9}, {Topic: "a2", Confidence: 0.8}},
+		{{Topic: "b", Confidence: 0.9}, {Topic: "b2", Confidence: 0.8}},
 	}}
-	a := NewAnalyzer(m, config.ForkConfig{WindowTurns: 10, MaxCandidates: 1})
+	cfg := analyzeCfg()
+	cfg.MaxCandidates = 1
+	a := NewAnalyzer(m, cfg)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
@@ -149,13 +316,17 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
 	}
+	// Without the per-window cap each window would contribute a+a2 / b+b2
+	// (4 distinct topics); with the cap exactly the top 1 of each survives.
 	if len(got) != 2 {
 		t.Fatalf("candidates = %d, want 2 (one per window, capped at 1 each)", len(got))
 	}
+	set := map[string]bool{}
 	for _, c := range got {
-		if c.Topic != "a" {
-			t.Errorf("candidate topic = %s, want top of window", c.Topic)
-		}
+		set[c.Topic] = true
+	}
+	if len(set) != 2 {
+		t.Errorf("topics = %v, want exactly 2 distinct", set)
 	}
 	if m.callN != 2 {
 		t.Errorf("LLM calls = %d, want 2 (no early stop across windows)", m.callN)
@@ -164,7 +335,7 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 
 func TestAnalyzeSkipsEmptyWindow(t *testing.T) {
 	m := &mockLLM{cands: []Candidate{{Topic: "x", Confidence: 0.9}}}
-	a := NewAnalyzer(m, config.ForkConfig{WindowTurns: 10})
+	a := NewAnalyzer(m, analyzeCfg())
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("real"),
 		turnsFrom(), // no content → no LLM call
@@ -182,7 +353,7 @@ func TestAnalyzeSkipsEmptyWindow(t *testing.T) {
 
 func TestAnalyzeLLMErrorPropagates(t *testing.T) {
 	m := &mockLLM{chatErr: errors.New("boom")}
-	a := NewAnalyzer(m, config.ForkConfig{WindowTurns: 10})
+	a := NewAnalyzer(m, analyzeCfg())
 	_, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
 	if err == nil {
 		t.Fatal("expected error from LLM, got nil")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"interest-memory/internal/config"
 	"interest-memory/internal/llm"
@@ -18,6 +19,7 @@ type Candidate struct {
 	Confidence float64  `json:"confidence"`
 	Tags       []string `json:"tags"`
 	TurnRange  [2]int   `json:"turn_range"` // [start_turn, end_turn] 1-indexed
+	Subjective bool     `json:"subjective"` // 主观观点/偏好（豁免 verify 联网核查）
 }
 
 // LLM is the chat surface fork needs (implemented by *llm.Client).
@@ -33,32 +35,45 @@ type ForkAnalyzer interface {
 }
 
 // Analyzer extracts candidate interest points from transcript windows using
-// a side LLM call per window (design §五 step 1).
+// a side LLM call per window (design §五 step 1). Windows are analyzed
+// concurrently (bounded by maxConcurrency); results are deduplicated across
+// the overlapping prefix windows.
 type Analyzer struct {
 	llm           LLM
-	windowTurns   int
+	prefixStep    int
+	maxWindows    int
+	maxConcurrency int
 	maxCandidates int
 	minConfidence float64
 }
 
 // NewAnalyzer builds an Analyzer from fork config.
 func NewAnalyzer(client LLM, cfg config.ForkConfig) *Analyzer {
-	if cfg.WindowTurns <= 0 {
-		cfg.WindowTurns = 10
+	if cfg.PrefixStep <= 0 {
+		cfg.PrefixStep = 5
+	}
+	if cfg.MaxWindows <= 0 {
+		cfg.MaxWindows = 8
+	}
+	if cfg.MaxConcurrency <= 0 {
+		cfg.MaxConcurrency = 4
 	}
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.3
 	}
 	return &Analyzer{
-		llm:           client,
-		windowTurns:   cfg.WindowTurns,
-		maxCandidates: cfg.MaxCandidates,
-		minConfidence: cfg.MinConfidence,
+		llm:            client,
+		prefixStep:     cfg.PrefixStep,
+		maxWindows:     cfg.MaxWindows,
+		maxConcurrency: cfg.MaxConcurrency,
+		maxCandidates:  cfg.MaxCandidates,
+		minConfidence:  cfg.MinConfidence,
 	}
 }
 
 // SplitWindows slices turns into fixed-turn windows (design §五: 按 turn_count
 // 切固定轮数窗口). Empty or non-positive windowTurns falls back to 10.
+// Kept for compatibility; production uses SplitPrefixWindows.
 func SplitWindows(turns []llm.Message, windowTurns int) [][]llm.Message {
 	if windowTurns <= 0 {
 		windowTurns = 10
@@ -77,18 +92,99 @@ func SplitWindows(turns []llm.Message, windowTurns int) [][]llm.Message {
 	return out
 }
 
-// Analyze extracts candidates from each window and merges them. Candidate
-// count is capped per window by max_candidates_per_window (config semantics).
-func (a *Analyzer) Analyze(ctx context.Context, agentID string, windows [][]llm.Message) ([]Candidate, error) {
-	var out []Candidate
-	for _, w := range windows {
-		cands, err := a.extract(ctx, w)
-		if err != nil {
-			return out, fmt.Errorf("fork: analyze: %w", err)
-		}
-		out = append(out, cands...)
+// SplitPrefixWindows slices turns into growing prefix windows, stepping one
+// boundary per userStep user turns. Rationale: the rendered prompt of window
+// k is a strict string prefix of window k+1, so LLM providers with prompt
+// prefix caching (DeepSeek / SiliconFlow context caching) hit the shared
+// prefix and cut token cost. When the transcript has fewer than userStep
+// user turns it returns a single full window (no split — straight into the
+// extraction/verification flow).
+//
+// maxWindows>0 caps the result by keeping the longest windows (they remain a
+// prefix chain and the longest covers the full transcript).
+func SplitPrefixWindows(turns []llm.Message, userStep, maxWindows int) [][]llm.Message {
+	if userStep <= 0 {
+		userStep = 5
 	}
-	return out, nil
+	if len(turns) == 0 {
+		return nil
+	}
+	// Positions of user messages (user-turn counting).
+	var pos []int
+	for i, m := range turns {
+		if m.Role == "user" {
+			pos = append(pos, i)
+		}
+	}
+	if len(pos) < userStep {
+		return [][]llm.Message{turns}
+	}
+	var out [][]llm.Message
+	for k := userStep; k <= len(pos); k += userStep {
+		end := pos[k-1] + 1
+		w := turns[0:end]
+		if len(out) == 0 || !sameWindow(out[len(out)-1], w) {
+			out = append(out, w)
+		}
+	}
+	// Full window last: covers trailing turns after the last step boundary.
+	if len(out) == 0 || !sameWindow(out[len(out)-1], turns) {
+		out = append(out, turns)
+	}
+	if maxWindows > 0 && len(out) > maxWindows {
+		out = out[len(out)-maxWindows:]
+	}
+	return out
+}
+
+func sameWindow(a, b []llm.Message) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Analyze extracts candidates from each window concurrently (bounded by
+// maxConcurrency) and merges them in window order. Candidate count is capped
+// per window by max_candidates_per_window (config semantics); overlapping
+// prefix windows are deduplicated afterwards.
+func (a *Analyzer) Analyze(ctx context.Context, agentID string, windows [][]llm.Message) ([]Candidate, error) {
+	if len(windows) == 0 {
+		return nil, nil
+	}
+	results := make([]result, len(windows))
+	sem := make(chan struct{}, a.maxConcurrency)
+	var wg sync.WaitGroup
+	for i, w := range windows {
+		wg.Add(1)
+		go func(i int, w []llm.Message) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			cands, err := a.extract(ctx, w)
+			results[i] = result{cands: cands, err: err}
+		}(i, w)
+	}
+	wg.Wait()
+
+	var out []Candidate
+	for _, r := range results {
+		if r.err != nil {
+			return out, fmt.Errorf("fork: analyze: %w", r.err)
+		}
+		out = append(out, r.cands...)
+	}
+	return dedupe(out), nil
+}
+
+type result struct {
+	cands []Candidate
+	err   error
 }
 
 // extract asks the side LLM to identify interest points in a single window,
@@ -107,12 +203,15 @@ These could be:
 - Important facts about the codebase
 - Any strong opinions expressed
 
+For each topic, judge whether it is subjective (the user's own preference, taste, or opinion — e.g. "I prefer Go over Rust") or objective (a factual claim about the world — e.g. "PostgreSQL supports JSONB").
+
 Return a JSON array of objects, each with:
   - "topic": short phrase describing the topic
   - "reason": why this is worth remembering (1 sentence)
   - "confidence": 0.0 to 1.0
   - "tags": array of short tags (max 5)
   - "turn_range": [start_turn, end_turn] (approximate turn numbers from the excerpt)
+  - "subjective": true if this is a subjective preference/opinion, false if objective
 
 If nothing is worth remembering, return an empty array [].
 
@@ -125,7 +224,9 @@ Return ONLY valid JSON, no other text.`, snapshot)
 	if err := a.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &cands); err != nil {
 		return nil, err
 	}
-	filtered := cands[:0]
+	// Copy-filter into a fresh slice: cands may be shared across concurrent
+	// window goroutines (e.g. test fakes returning a common slice).
+	var filtered []Candidate
 	for _, c := range cands {
 		if c.Confidence >= a.minConfidence {
 			filtered = append(filtered, c)
@@ -137,17 +238,75 @@ Return ONLY valid JSON, no other text.`, snapshot)
 	return filtered, nil
 }
 
-// summarize renders the most relevant parts of a window for the extraction
-// prompt: user/assistant text content, numbered as turns (adaptation of
-// my-agent-core's summarizeMessagesForInterest to llm.Message).
-func summarize(turns []llm.Message) string {
-	start := 0
-	if len(turns) > 20 {
-		start = len(turns) - 20
+// dedupe merges candidates that describe the same topic (case/whitespace
+// normalized) — prefix windows surface the same point repeatedly. Keeps the
+// highest-confidence variant, merges turn_range to the span, and folds tags.
+func dedupe(cands []Candidate) []Candidate {
+	var out []Candidate
+	for _, c := range cands {
+		key := normalizeTopic(c.Topic)
+		if key == "" {
+			out = append(out, c)
+			continue
+		}
+		idx := -1
+		for i := range out {
+			if normalizeTopic(out[i].Topic) == key {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			out = append(out, c)
+			continue
+		}
+		merged := out[idx]
+		if c.Confidence > merged.Confidence {
+			merged.Topic = c.Topic
+			merged.Reason = c.Reason
+			merged.Subjective = c.Subjective
+			merged.Confidence = c.Confidence
+		}
+		if c.TurnRange[0] > 0 && (merged.TurnRange[0] == 0 || c.TurnRange[0] < merged.TurnRange[0]) {
+			merged.TurnRange[0] = c.TurnRange[0]
+		}
+		if c.TurnRange[1] > merged.TurnRange[1] {
+			merged.TurnRange[1] = c.TurnRange[1]
+		}
+		for _, tag := range c.Tags {
+			if !containsString(merged.Tags, tag) {
+				merged.Tags = append(merged.Tags, tag)
+			}
+		}
+		out[idx] = merged
 	}
+	return out
+}
+
+func normalizeTopic(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(s)), " "))
+}
+
+func containsString(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// summarize renders the window for the extraction prompt: user/assistant
+// text content, numbered as turns from 1 (adaptation of my-agent-core's
+// summarizeMessagesForInterest to llm.Message).
+//
+// The WHOLE window is rendered (no tail truncation) so that for prefix
+// windows the rendered text of window k is a strict prefix of window k+1 —
+// required for LLM provider prompt prefix caching to hit.
+func summarize(turns []llm.Message) string {
 	var b strings.Builder
 	turnNum := 1
-	for _, m := range turns[start:] {
+	for _, m := range turns {
 		text := strings.TrimSpace(m.Content)
 		if text == "" {
 			continue

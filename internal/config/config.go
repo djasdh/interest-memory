@@ -47,7 +47,6 @@ type EmbeddingConfig struct {
 }
 
 type ForkConfig struct {
-	WindowTurns      int     `yaml:"window_turns"`       // 旧固定轮数窗口（Task 4 删除）
 	PrefixStep       int     `yaml:"prefix_step"`       // 前缀窗口按 user 回合的递增步长
 	MaxWindows       int     `yaml:"max_windows"`       // 前缀窗口上限（超限保留最长的 N 个）
 	MaxConcurrency   int     `yaml:"max_concurrency"`   // 窗口提取并行度
@@ -85,7 +84,6 @@ func Default() Config {
 			Dimensions: 1024,
 		},
 		Fork: ForkConfig{
-			WindowTurns:      10,
 			PrefixStep:       5,
 			MaxWindows:       8,
 			MaxConcurrency:   4,

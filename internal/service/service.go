@@ -75,8 +75,8 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		return nil
 	}
 
-	// 1. fork: window split + side-LLM extraction (fork works on llm.Message)
-	windows := fork.SplitWindows(toLLMMessages(msgs), s.cfg.Fork.WindowTurns)
+	// 1. fork: prefix-window split + concurrent side-LLM extraction
+	windows := fork.SplitPrefixWindows(toLLMMessages(msgs), s.cfg.Fork.PrefixStep, s.cfg.Fork.MaxWindows)
 	cands, err := s.fork.Analyze(ctx, agentID, windows)
 	if err != nil {
 		return fmt.Errorf("service: fork: %w", err)
