@@ -229,13 +229,54 @@ Return ONLY valid JSON, no other text.`, snapshot)
 	var filtered []Candidate
 	for _, c := range cands {
 		if c.Confidence >= a.minConfidence {
-			filtered = append(filtered, c)
+			filtered = append(filtered, mapTurnRange(c, renderIndices(turns)))
 		}
 	}
 	if a.maxCandidates > 0 && len(filtered) > a.maxCandidates {
 		filtered = filtered[:a.maxCandidates]
 	}
 	return filtered, nil
+}
+
+// renderIndices returns the global message indexes that summarize() renders,
+// in order — i.e. non-empty user/assistant messages. The extraction prompt's
+// turn numbers are 1-based positions in this sequence; candidates' TurnRange
+// must be mapped back to global indexes so downstream code can slice the
+// transcript for the exact conversation segment.
+func renderIndices(turns []llm.Message) []int {
+	var idx []int
+	for i, m := range turns {
+		if m.Role != "user" && m.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		idx = append(idx, i)
+	}
+	return idx
+}
+
+// mapTurnRange converts a candidate's window-local TurnRange (1-based rendered
+// turn numbers) into global message indexes. A zero range stays zero.
+func mapTurnRange(c Candidate, idx []int) Candidate {
+	if len(idx) == 0 || c.TurnRange == [2]int{0, 0} {
+		return c
+	}
+	s, e := c.TurnRange[0], c.TurnRange[1]
+	if s < 1 {
+		s = 1
+	}
+	if e > len(idx) {
+		e = len(idx)
+	}
+	if s > len(idx) {
+		return c
+	}
+	start := idx[s-1]
+	end := idx[e-1]
+	c.TurnRange = [2]int{start, end}
+	return c
 }
 
 // dedupe merges candidates that describe the same topic (case/whitespace

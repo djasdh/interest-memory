@@ -183,28 +183,6 @@ func TestSplitPrefixWindowsEmpty(t *testing.T) {
 	}
 }
 
-func TestDedupe(t *testing.T) {
-	in := []Candidate{
-		{Topic: "PostgreSQL", Confidence: 0.9, Tags: []string{"db"}, TurnRange: [2]int{1, 2}},
-		{Topic: "postgresql", Confidence: 0.7, Tags: []string{"db", "sql"}, TurnRange: [2]int{3, 4}},
-		{Topic: "Go 并发", Confidence: 0.8, TurnRange: [2]int{2, 2}},
-	}
-	got := dedupe(in)
-	if len(got) != 2 {
-		t.Fatalf("dedupe = %d, want 2 (postgresql merged)", len(got))
-	}
-	first := got[0]
-	if first.Confidence != 0.9 {
-		t.Errorf("merged confidence = %f, want 0.9 (highest)", first.Confidence)
-	}
-	if first.TurnRange != [2]int{1, 4} {
-		t.Errorf("merged turn_range = %v, want [1 4]", first.TurnRange)
-	}
-	if len(first.Tags) < 2 {
-		t.Errorf("merged tags = %v, want combined", first.Tags)
-	}
-}
-
 func TestExtractParsesSubjective(t *testing.T) {
 	// mockLLM returns Candidate with Subjective set — proves the JSON round-trip
 	// and that Analyze passes it through.
@@ -226,6 +204,60 @@ func TestExtractParsesSubjective(t *testing.T) {
 	// Prompt should ask the model to judge subjectivity.
 	if !contains(m.prompt, "subjective") {
 		t.Error("prompt should mention subjective judgment")
+	}
+}
+
+func TestAnalyzeMapsTurnRangeToGlobalIndex(t *testing.T) {
+	// Global turns: a@0, r1@1, b@2, c@3(empty, skipped), r2@4, tool@5(skipped), d@6.
+	// Rendered sequence (turn # → global index): 1→0(a), 2→1(r1), 3→2(b), 4→4(r2), 5→6(d).
+	msgs := []llm.Message{
+		{Role: "user", Content: "a"},
+		{Role: "assistant", Content: "r1"},
+		{Role: "user", Content: "b"},
+		{Role: "user", Content: "  "},
+		{Role: "assistant", Content: "r2"},
+		{Role: "tool", Content: "t"},
+		{Role: "user", Content: "d"},
+	}
+	m := &mockLLM{cands: []Candidate{
+		{Topic: "x", Confidence: 0.9, TurnRange: [2]int{2, 4}},
+		{Topic: "y", Confidence: 0.9, TurnRange: [2]int{0, 0}}, // no range
+	}}
+	a := NewAnalyzer(m, analyzeCfg())
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{msgs})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(got))
+	}
+	if got[0].TurnRange != [2]int{1, 4} {
+		t.Errorf("mapped turn_range = %v, want [1 4] (rendered turns 2..4 → global 1..4)", got[0].TurnRange)
+	}
+	if got[1].TurnRange != [2]int{0, 0} {
+		t.Errorf("zero turn_range should stay [0 0], got %v", got[1].TurnRange)
+	}
+}
+
+func TestDedupe(t *testing.T) {
+	in := []Candidate{
+		{Topic: "PostgreSQL", Confidence: 0.9, Tags: []string{"db"}, TurnRange: [2]int{1, 2}},
+		{Topic: "postgresql", Confidence: 0.7, Tags: []string{"db", "sql"}, TurnRange: [2]int{3, 4}},
+		{Topic: "Go 并发", Confidence: 0.8, TurnRange: [2]int{2, 2}},
+	}
+	got := dedupe(in)
+	if len(got) != 2 {
+		t.Fatalf("dedupe = %d, want 2 (postgresql merged)", len(got))
+	}
+	first := got[0]
+	if first.Confidence != 0.9 {
+		t.Errorf("merged confidence = %f, want 0.9 (highest)", first.Confidence)
+	}
+	if first.TurnRange != [2]int{1, 4} {
+		t.Errorf("merged turn_range = %v, want [1 4]", first.TurnRange)
+	}
+	if len(first.Tags) < 2 {
+		t.Errorf("merged tags = %v, want combined", first.Tags)
 	}
 }
 
