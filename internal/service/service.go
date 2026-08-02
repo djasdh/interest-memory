@@ -172,6 +172,18 @@ func (s *Service) Recall(ctx context.Context, agentID, query string) (string, er
 	})
 }
 
+// Search is the consumer-side memory_search: structured hits with full
+// content + edges (see recall.Result).
+func (s *Service) Search(ctx context.Context, agentID, query string) ([]recall.Result, error) {
+	return s.recall.Search(ctx, agentID, query, s.cfg.Search.TopK, s.cfg.Search.MaxBodyLen)
+}
+
+// GetByID fetches one entity (page or interest point) with full content +
+// edges for the consumer-side memory_search id lookup.
+func (s *Service) GetByID(ctx context.Context, agentID, id string) (*recall.Result, error) {
+	return s.recall.GetByID(ctx, agentID, id, s.cfg.Search.MaxBodyLen)
+}
+
 // SaveTranscript persists a pushed session-end transcript.
 func (s *Service) SaveTranscript(ctx context.Context, t store.Transcript) error {
 	return s.store.SaveTranscript(ctx, t)

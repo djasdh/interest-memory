@@ -6,8 +6,46 @@ import (
 	"time"
 
 	"interest-memory/internal/config"
+	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
 )
+
+// fakeRecall implements recall.RecallService for passthrough tests.
+type fakeRecall struct {
+	searchResults []recall.Result
+	byID          *recall.Result
+}
+
+func (f *fakeRecall) Recall(context.Context, string, string, recall.Options) (string, error) { return "", nil }
+func (f *fakeRecall) Search(_ context.Context, _, _ string, topK, maxBodyLen int) ([]recall.Result, error) {
+	return f.searchResults, nil
+}
+func (f *fakeRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.Result, error) {
+	return f.byID, nil
+}
+
+func TestServiceSearchPassthrough(t *testing.T) {
+	want := []recall.Result{{Kind: "wiki_page", ID: "pg", Title: "T"}}
+	svc := &Service{cfg: config.Config{Search: config.SearchConfig{TopK: 3, MaxBodyLen: 4000}}, recall: &fakeRecall{searchResults: want}}
+	got, err := svc.Search(context.Background(), "a", "q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "pg" {
+		t.Errorf("search = %+v", got)
+	}
+}
+
+func TestServiceGetByIDPassthrough(t *testing.T) {
+	svc := &Service{cfg: config.Config{Search: config.SearchConfig{MaxBodyLen: 4000}}, recall: &fakeRecall{byID: &recall.Result{ID: "ip-1", Kind: "interest_point"}}}
+	got, err := svc.GetByID(context.Background(), "a", "ip-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != "ip-1" {
+		t.Errorf("by id = %+v", got)
+	}
+}
 
 // TestProcessSessionEmptyTranscript: empty/no-interest transcript should
 // return nil and not error (pipeline short-circuits).

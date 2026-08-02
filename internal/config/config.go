@@ -16,7 +16,14 @@ type Config struct {
 	Fork      ForkConfig      `yaml:"fork"`
 	Verify    VerifyConfig    `yaml:"verify"`
 	Wiki      WikiConfig      `yaml:"wiki"`
+	Search    SearchConfig    `yaml:"search"`
 	Recall    RecallConfig    `yaml:"recall"`
+}
+
+// SearchConfig controls the consumer-side memory_search tool.
+type SearchConfig struct {
+	TopK       int `yaml:"top_k"`        // 语义检索默认返回数
+	MaxBodyLen int `yaml:"max_body_len"` // 正文/摘要截断上限（claims/evidence/边不截断）
 }
 
 // WikiConfig controls the wiki writing / reconcile stage.
@@ -109,6 +116,10 @@ func Default() Config {
 		Wiki: WikiConfig{
 			MaxHops:   3,
 			BatchSize: 10,
+		},
+		Search: SearchConfig{
+			TopK:       3,
+			MaxBodyLen: 4000,
 		},
 		Recall: RecallConfig{
 			TopK:        8,

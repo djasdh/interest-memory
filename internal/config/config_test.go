@@ -50,6 +50,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Wiki.MaxHops != 3 || cfg.Wiki.BatchSize != 10 {
 		t.Errorf("default wiki = %+v, want MaxHops=3 BatchSize=10", cfg.Wiki)
 	}
+	if cfg.Search.TopK != 3 || cfg.Search.MaxBodyLen != 4000 {
+		t.Errorf("default search = %+v, want TopK=3 MaxBodyLen=4000", cfg.Search)
+	}
 }
 
 func TestLoadFileOverrides(t *testing.T) {
