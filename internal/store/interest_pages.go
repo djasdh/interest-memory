@@ -17,10 +17,10 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO interest_points (
 			id, agent_id, name, summary, keywords, importance, status, subjective,
-			turn_range_start, turn_range_end,
+			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, agent_id) DO UPDATE SET
 			name = excluded.name,
 			summary = excluded.summary,
@@ -30,6 +30,7 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 			subjective = excluded.subjective,
 			turn_range_start = excluded.turn_range_start,
 			turn_range_end = excluded.turn_range_end,
+			event_time = excluded.event_time,
 			confidence = excluded.confidence,
 			reliability_status = excluded.reliability_status,
 			evidence = excluded.evidence,
@@ -40,7 +41,7 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 			seen_count = excluded.seen_count,
 			source_session_ids = excluded.source_session_ids`,
 		p.ID, p.AgentID, p.Name, p.Summary, marshalJSON(p.Keywords), p.Importance, p.Status,
-		boolInt(p.Subjective), p.TurnRange[0], p.TurnRange[1],
+		boolInt(p.Subjective), p.TurnRange[0], p.TurnRange[1], nullableTime(p.EventTime),
 		p.Reliability.Confidence, p.Reliability.Status, marshalJSON(p.Reliability.Evidence),
 		p.Freshness.Level, p.Freshness.UpdatedAt, p.Freshness.TTLDays,
 		p.FirstSeenAt, p.LastSeenAt, p.SeenCount, marshalJSON(p.SourceSessions),
@@ -54,7 +55,7 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 func (s *SQLiteStore) GetInterestPoint(ctx context.Context, agentID, id string) (*InterestPoint, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
-			turn_range_start, turn_range_end,
+			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points WHERE id = ? AND agent_id = ?`, id, agentID)
@@ -71,7 +72,7 @@ func (s *SQLiteStore) GetInterestPoint(ctx context.Context, agentID, id string) 
 func (s *SQLiteStore) ListInterestPoints(ctx context.Context, agentID string) ([]InterestPoint, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
-			turn_range_start, turn_range_end,
+			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points WHERE agent_id = ? ORDER BY importance DESC`, agentID)
@@ -97,7 +98,7 @@ func (s *SQLiteStore) SearchInterestPointsByKeywords(ctx context.Context, agentI
 	pattern := "%" + strings.ToLower(query) + "%"
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
-			turn_range_start, turn_range_end,
+			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points
@@ -126,9 +127,10 @@ func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	var p InterestPoint
 	var keywords, evidence, sessions string
 	var subjective, trStart, trEnd int
+	var evt sql.NullTime
 	err := row.Scan(
 		&p.ID, &p.AgentID, &p.Name, &p.Summary, &keywords, &p.Importance, &p.Status,
-		&subjective, &trStart, &trEnd,
+		&subjective, &trStart, &trEnd, &evt,
 		&p.Reliability.Confidence, &p.Reliability.Status, &evidence, &p.Freshness.Level,
 		&p.Freshness.UpdatedAt, &p.Freshness.TTLDays, &p.FirstSeenAt, &p.LastSeenAt,
 		&p.SeenCount, &sessions,
@@ -141,6 +143,9 @@ func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	unmarshalJSON(sessions, &p.SourceSessions)
 	p.Subjective = subjective != 0
 	p.TurnRange = [2]int{trStart, trEnd}
+	if evt.Valid {
+		p.EventTime = evt.Time
+	}
 	return &p, nil
 }
 
@@ -155,8 +160,8 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 		status = "active"
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO wiki_pages (id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO wiki_pages (id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, agent_id) DO UPDATE SET
 			page_type = excluded.page_type,
 			title = excluded.title,
@@ -164,8 +169,9 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 			status = excluded.status,
 			tags = excluded.tags,
 			sources = excluded.sources,
+			event_time = excluded.event_time,
 			updated_at = excluded.updated_at`,
-		p.ID, p.AgentID, string(p.PageType), p.Title, p.BodyMD, status, marshalJSON(p.Tags), marshalJSON(p.Sources), p.CreatedAt, p.UpdatedAt)
+		p.ID, p.AgentID, string(p.PageType), p.Title, p.BodyMD, status, marshalJSON(p.Tags), marshalJSON(p.Sources), nullableTime(p.EventTime), p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("store: upsert page: %w", err)
 	}
@@ -174,11 +180,12 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 
 func (s *SQLiteStore) GetPage(ctx context.Context, agentID, id string) (*Page, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
+		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
 		FROM wiki_pages WHERE id = ? AND agent_id = ?`, id, agentID)
 	var p Page
 	var tags, sources string
-	err := row.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt)
+	var evt sql.NullTime
+	err := row.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &evt, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -187,6 +194,9 @@ func (s *SQLiteStore) GetPage(ctx context.Context, agentID, id string) (*Page, e
 	}
 	unmarshalJSON(tags, &p.Tags)
 	unmarshalJSON(sources, &p.Sources)
+	if evt.Valid {
+		p.EventTime = evt.Time
+	}
 	claims, _ := s.ListClaims(ctx, agentID, p.ID)
 	p.Claims = claims
 	return &p, nil
@@ -197,11 +207,11 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 	var err error
 	if pageType == "" {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
+			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
 			FROM wiki_pages WHERE agent_id = ?`, agentID)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
+			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
 			FROM wiki_pages WHERE agent_id = ? AND page_type = ?`, agentID, string(pageType))
 	}
 	if err != nil {
@@ -212,11 +222,15 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 	for rows.Next() {
 		var p Page
 		var tags, sources string
-		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var evt sql.NullTime
+		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &evt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		unmarshalJSON(tags, &p.Tags)
 		unmarshalJSON(sources, &p.Sources)
+		if evt.Valid {
+			p.EventTime = evt.Time
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -228,7 +242,7 @@ func (s *SQLiteStore) SearchPagesByKeywords(ctx context.Context, agentID, query 
 	}
 	pattern := "%" + strings.ToLower(query) + "%"
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
+		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
 		FROM wiki_pages
 		WHERE agent_id = ? AND (lower(title) LIKE ? OR lower(body_md) LIKE ?)
 		ORDER BY updated_at DESC LIMIT ?`, agentID, pattern, pattern, limit)
@@ -240,11 +254,15 @@ func (s *SQLiteStore) SearchPagesByKeywords(ctx context.Context, agentID, query 
 	for rows.Next() {
 		var p Page
 		var tags, sources string
-		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var evt sql.NullTime
+		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &evt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		unmarshalJSON(tags, &p.Tags)
 		unmarshalJSON(sources, &p.Sources)
+		if evt.Valid {
+			p.EventTime = evt.Time
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()

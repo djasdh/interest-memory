@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -94,6 +95,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			subjective INTEGER NOT NULL DEFAULT 0,
 			turn_range_start INTEGER NOT NULL DEFAULT 0,
 			turn_range_end INTEGER NOT NULL DEFAULT 0,
+			event_time TIMESTAMP,
 			confidence REAL NOT NULL DEFAULT 0,
 			reliability_status TEXT NOT NULL DEFAULT 'unknown',
 			evidence TEXT NOT NULL DEFAULT '[]',
@@ -115,6 +117,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			status TEXT NOT NULL DEFAULT 'active',
 			tags TEXT NOT NULL DEFAULT '[]',
 			sources TEXT NOT NULL DEFAULT '[]',
+			event_time TIMESTAMP,
 			created_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
 			PRIMARY KEY (id, agent_id)
@@ -190,6 +193,8 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE session_transcripts ADD COLUMN session_date TIMESTAMP`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN event_time TIMESTAMP`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN event_time TIMESTAMP`)
 	return nil
 }
 
@@ -213,4 +218,12 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// nullableTime returns nil for zero times so SQLite stores NULL.
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }

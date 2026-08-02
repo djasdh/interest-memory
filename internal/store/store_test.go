@@ -306,6 +306,38 @@ func TestTranscriptSessionDateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEventTimeRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	et := now.Add(-48 * time.Hour)
+
+	p := InterestPoint{ID: "ip-et", AgentID: "a", Name: "点", Summary: "s", Status: "active",
+		EventTime: et, Reliability: Reliability{Confidence: 0.8}, Freshness: Freshness{Level: "fresh", UpdatedAt: now}}
+	if err := s.UpsertInterestPoint(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetInterestPoint(ctx, "a", "ip-et")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || !got.EventTime.Equal(et) {
+		t.Errorf("interest event_time = %v, want %v", got.EventTime, et)
+	}
+
+	pg := Page{ID: "pg-et", AgentID: "a", Title: "T", BodyMD: "b", EventTime: et}
+	if err := s.UpsertPage(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	pgGot, err := s.GetPage(ctx, "a", "pg-et")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pgGot == nil || !pgGot.EventTime.Equal(et) {
+		t.Errorf("page event_time = %v, want %v", pgGot.EventTime, et)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

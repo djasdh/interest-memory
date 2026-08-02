@@ -51,6 +51,7 @@ type InterestPoint struct {
 	Status         string      `json:"status"` // active | archived
 	Subjective     bool        `json:"subjective"` // 主观观点/偏好标记（豁免联网核查）
 	TurnRange      [2]int      `json:"turn_range"` // 来源会话全局轮次 [start,end]
+	EventTime      time.Time   `json:"event_time"` // 事件发生时间（会话开始时间，session_date 兜底 received_at）
 	Reliability    Reliability `json:"reliability"`
 	Freshness      Freshness   `json:"freshness"`
 	FirstSeenAt    time.Time   `json:"first_seen_at"`
@@ -79,6 +80,7 @@ type Page struct {
 	Status    string    `json:"status"` // active | superseded | archived（"" 视为 active）
 	Tags      []string  `json:"tags,omitempty"`   // 分类法标签
 	Sources   []string  `json:"sources,omitempty"` // 来源：网页 URL 或现有页 id（主观性豁免可空）
+	EventTime time.Time `json:"event_time"` // 事件发生时间（会话开始时间）
 	Claims    []Claim   `json:"claims"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
