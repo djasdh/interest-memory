@@ -92,6 +92,26 @@ func (f *fakeVerifier) GradeForRecall(context.Context, string, []vec.Hit) ([]ver
 }
 func (f *fakeVerifier) FeedbackWrite(context.Context, string, []vec.Hit) error { return nil }
 
+func TestSetCandidateEventTime(t *testing.T) {
+	svc := &Service{}
+	now := time.Now().UTC()
+	sd := now.Add(-24 * time.Hour)
+
+	// session_date present → preferred.
+	c1 := []fork.Candidate{{Topic: "a"}}
+	svc.setCandidateEventTime(c1, &sd, now)
+	if !c1[0].EventTime.Equal(sd) {
+		t.Errorf("event_time = %v, want session_date %v", c1[0].EventTime, sd)
+	}
+
+	// session_date missing → received_at fallback.
+	c2 := []fork.Candidate{{Topic: "b"}}
+	svc.setCandidateEventTime(c2, nil, now)
+	if !c2[0].EventTime.Equal(now) {
+		t.Errorf("event_time = %v, want received_at %v", c2[0].EventTime, now)
+	}
+}
+
 func TestServiceSearchPassthrough(t *testing.T) {
 	want := []recall.Result{{Kind: "wiki_page", ID: "pg", Title: "T"}}
 	svc := &Service{cfg: config.Config{Search: config.SearchConfig{TopK: 3, MaxBodyLen: 4000}}, recall: &fakeRecall{searchResults: want}}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"interest-memory/internal/config"
 	"interest-memory/internal/fork"
@@ -93,6 +94,7 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	if len(cands) == 0 {
 		return nil
 	}
+	s.setCandidateEventTime(cands, t.SessionDate, t.ReceivedAt)
 
 	// 2. verify#1: fact-check + evidence
 	verified, err := s.verify.VerifyCandidates(ctx, agentID, cands)
@@ -248,6 +250,19 @@ func (s *Service) ForkManual(ctx context.Context, agentID string) (*store.Transc
 		return nil, nil
 	}
 	return &list[0], nil
+}
+
+// setCandidateEventTime stamps extracted candidates with the event time:
+// the passed session start date when present, otherwise the server receive
+// time (fallback guarantees a non-zero EventTime for temporal filtering).
+func (s *Service) setCandidateEventTime(cands []fork.Candidate, sessionDate *time.Time, receivedAt time.Time) {
+	et := receivedAt
+	if sessionDate != nil {
+		et = *sessionDate
+	}
+	for i := range cands {
+		cands[i].EventTime = et
+	}
 }
 
 // toLLMMessages maps my-agent-core messages to the internal llm.Message

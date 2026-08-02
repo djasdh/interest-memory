@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"interest-memory/internal/config"
 	"interest-memory/internal/llm"
@@ -20,6 +21,9 @@ type Candidate struct {
 	Tags       []string `json:"tags"`
 	TurnRange  [2]int   `json:"turn_range"` // [start_turn, end_turn] 1-indexed
 	Subjective bool     `json:"subjective"` // 主观观点/偏好（豁免 verify 联网核查）
+	// EventTime is the session event time, set by the service layer after
+	// extraction (LLM never sees this field).
+	EventTime time.Time `json:"-"`
 }
 
 // LLM is the chat surface fork needs (implemented by *llm.Client).
