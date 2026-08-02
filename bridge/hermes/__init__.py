@@ -182,8 +182,72 @@ class InterestMemoryProvider(MemoryProvider):
     # -- Tools ---------------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Context-only provider — no model-visible tools."""
-        return []
+        """Expose the consumer-side memory_search tool.
+
+        - ``query``: semantic retrieval over interest points + wiki pages.
+          Returns full content (body/claims/evidence) plus adjacency edges
+          (outlinks/backlinks with far-end titles).
+        - ``id``: fetch one specific page or interest point by id (full
+          content + edges). Takes precedence over query when both given.
+        - ``top_k``: max hits for query search (default 3).
+        """
+        return [
+            {
+                "name": "memory_search",
+                "description": (
+                    "Search the interest-memory knowledge base and return full "
+                    "entries (body/claims/evidence) with their relationship edges. "
+                    "Pass 'query' for a semantic search, or 'id' to fetch one "
+                    "specific page/interest point by id (id wins when both are given)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Semantic search query (e.g. a topic, decision, or phrase)",
+                        },
+                        "id": {
+                            "type": "string",
+                            "description": "Exact id of a wiki page or interest point to fetch",
+                        },
+                        "top_k": {
+                            "type": "number",
+                            "description": "Max results for query search (default 3)",
+                        },
+                    },
+                },
+            }
+        ]
+
+    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+        """Dispatch a memory provider tool call. Returns a JSON string."""
+        if tool_name != "memory_search":
+            raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
+        query = str(args.get("query") or "")
+        entity_id = str(args.get("id") or "")
+        try:
+            top_k = int(args.get("top_k") or 0)
+        except (TypeError, ValueError):
+            top_k = 0
+        if not query and not entity_id:
+            return json.dumps({"error": "memory_search: missing 'query' or 'id'"}, ensure_ascii=False)
+        try:
+            import requests
+            url = f"{self._base_url}/api/v1/{self._agent_id}/search"
+            params: Dict[str, Any] = {}
+            if entity_id:
+                params["id"] = entity_id
+            else:
+                params["query"] = query
+                if top_k > 0:
+                    params["top_k"] = top_k
+            resp = requests.get(url, params=params, timeout=self._timeout)
+            if resp.status_code != 200:
+                return json.dumps({"error": f"memory_search: status {resp.status_code}"}, ensure_ascii=False)
+            return json.dumps(resp.json().get("items", []), ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"error": f"memory_search: {exc}"}, ensure_ascii=False)
 
 
 def _extract_turns(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:

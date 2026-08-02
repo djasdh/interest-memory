@@ -178,6 +178,67 @@ class ProviderTest(unittest.TestCase):
             self.p.shutdown()
         self.assertTrue(post.called)
 
+    # -- memory_search tool --------------------------------------------------
+
+    def test_get_tool_schemas_exposes_memory_search(self):
+        schemas = self.p.get_tool_schemas()
+        self.assertEqual(len(schemas), 1)
+        s = schemas[0]
+        self.assertEqual(s["name"], "memory_search")
+        self.assertIn("parameters", s)
+        self.assertIn("query", s["parameters"]["properties"])
+        self.assertIn("id", s["parameters"]["properties"])
+        self.assertIn("top_k", s["parameters"]["properties"])
+
+    def test_handle_tool_call_search_by_query(self):
+        self.p.initialize("s1")
+        with mock.patch("requests.get") as get:
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "items": [{"kind": "wiki_page", "id": "pg", "title": "T",
+                           "outlinks": [{"id": "x", "title": "X", "kind": "related"}]}]
+            }
+            get.return_value = resp
+            out = self.p.handle_tool_call("memory_search", {"query": "postgresql", "top_k": 5})
+        get.assert_called_once()
+        url = get.call_args[0][0]
+        self.assertIn("/search", url)
+        params = get.call_args[1].get("params", {})
+        self.assertEqual(params.get("query"), "postgresql")
+        self.assertEqual(params.get("top_k"), 5)
+        payload = json.loads(out)
+        self.assertEqual(payload[0]["id"], "pg")
+
+    def test_handle_tool_call_search_by_id(self):
+        self.p.initialize("s1")
+        with mock.patch("requests.get") as get:
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"items": [{"kind": "interest_point", "id": "ip-1"}]}
+            get.return_value = resp
+            out = self.p.handle_tool_call("memory_search", {"id": "ip-1"})
+        params = get.call_args[1].get("params", {})
+        self.assertEqual(params.get("id"), "ip-1")
+        self.assertNotIn("query", params)
+        self.assertEqual(json.loads(out)[0]["id"], "ip-1")
+
+    def test_handle_tool_call_missing_args(self):
+        self.p.initialize("s1")
+        out = self.p.handle_tool_call("memory_search", {})
+        self.assertIn("error", json.loads(out))
+
+    def test_handle_tool_call_failure_isolated(self):
+        self.p.initialize("s1")
+        with mock.patch("requests.get", side_effect=RuntimeError("boom")):
+            out = self.p.handle_tool_call("memory_search", {"query": "q"})
+        self.assertIn("error", json.loads(out))
+
+    def test_handle_tool_call_unknown_tool(self):
+        self.p.initialize("s1")
+        with self.assertRaises(NotImplementedError):
+            self.p.handle_tool_call("nope", {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
