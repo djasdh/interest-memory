@@ -182,6 +182,74 @@ func TestReviewToolDegradesWithoutLLM(t *testing.T) {
 
 
 
+func TestWriteToolCreatesHasPageEdge(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+
+	_, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                "postgresql-page",
+		"title":             "PostgreSQL",
+		"content":           "默认数据库",
+		"page_type":         "concept",
+		"interest_point_id": "ip-123",
+	}, nil)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	edges, err := st.Outlinks(ctx, "agent-a", "ip-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range edges {
+		if e.TargetID == "postgresql-page" && e.Kind == store.EdgeHasPage {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("has_page edge not created; outlinks = %+v", edges)
+	}
+}
+
+func TestWriteToolStatusParam(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+
+	_, err := tool.Execute(types.Context{}, map[string]any{
+		"id":      "old-page",
+		"title":   "Old",
+		"content": "旧内容",
+		"status":  "superseded",
+	}, nil)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pg, err := st.GetPage(ctx, "agent-a", "old-page")
+	if err != nil || pg == nil {
+		t.Fatalf("page missing: %v", err)
+	}
+	if pg.Status != "superseded" {
+		t.Errorf("page status = %q, want superseded", pg.Status)
+	}
+}
+
+func TestWriteToolDefaultStatusActive(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id": "fresh-page", "title": "Fresh", "content": "x",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := st.GetPage(ctx, "agent-a", "fresh-page")
+	if pg == nil || pg.Status != "active" {
+		t.Errorf("default status = %+v, want active", pg)
+	}
+}
+
 func TestWriteToolCreateAndUpdate(t *testing.T) {
 	deps, st, _ := newTestDeps(t)
 	ctx := context.Background()

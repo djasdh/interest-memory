@@ -164,14 +164,16 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{
-					"type":        "string",
-					"description": "Unique page identifier (lowercase, hyphen-separated)",
-				},
-				"title":       map[string]any{"type": "string"},
-				"content":     map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
-				"page_type":   map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
-				"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"id": map[string]any{
+				"type":        "string",
+				"description": "Unique page identifier (lowercase, hyphen-separated)",
+			},
+			"title":       map[string]any{"type": "string"},
+			"content":     map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
+			"page_type":   map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
+			"status":      map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
+			"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
+			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"session_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
 				"edges": map[string]any{
 					"type":  "array",
@@ -225,6 +227,14 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		pageType = store.PageConcept
 	}
 
+	status := strings.ToLower(asString(args["status"]))
+	switch status {
+	case "active", "superseded", "archived":
+	default:
+		status = "active"
+	}
+	interestPointID := normalizeID(asString(args["interest_point_id"]))
+
 	tags := stringList(args["tags"])
 	if len(tags) > 10 {
 		tags = tags[:10]
@@ -266,6 +276,7 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		PageType:  pageType,
 		Title:     title,
 		BodyMD:    content,
+		Status:    status,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -274,6 +285,16 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 	}
 	if err := deps.Store.UpsertPage(ctx, page); err != nil {
 		return "", fmt.Errorf("wiki_write: upsert page: %w", err)
+	}
+
+	// Link the interest point that drove this page (has_page edge).
+	if interestPointID != "" {
+		if err := deps.Store.AddEdgePair(ctx, agentID, store.Edge{
+			SourceID: interestPointID, TargetID: id,
+			Kind: store.EdgeHasPage, Weight: 1, CreatedAt: now,
+		}); err != nil {
+			return "", fmt.Errorf("wiki_write: add has_page edge: %w", err)
+		}
 	}
 
 	// Claims.
