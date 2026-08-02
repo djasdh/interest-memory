@@ -98,8 +98,8 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		return fmt.Errorf("service: verify#1: %w", err)
 	}
 
-	// 3. interest: clean/dedup/merge/relate
-	pts, err := s.interest.Clean(ctx, agentID, verified)
+	// 3. interest: clean/dedup/merge/relate (archived ids feed reconcile)
+	pts, archived, err := s.interest.Clean(ctx, agentID, verified)
 	if err != nil {
 		return fmt.Errorf("service: interest: %w", err)
 	}
@@ -126,7 +126,14 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
 		return fmt.Errorf("service: rebuild edges: %w", err)
 	}
-	_ = touched // consumed by Reconcile (stage 9)
+	// 8. reconcile related pages: propagate structural changes (page writes
+	// + archived interest points) to related pages within max_hops, batched.
+	if err := s.wiki.ReconcileRelated(ctx, agentID, wiki.ReconcileInput{
+		TouchedPages:   touched,
+		ArchivedPoints: archived,
+	}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
+		return fmt.Errorf("service: reconcile: %w", err)
+	}
 	return nil
 }
 

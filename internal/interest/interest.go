@@ -35,9 +35,11 @@ type Store interface {
 
 // Cleaner deduplicates/merges/relates verified candidates against historical
 // interest points (design §五 step 3): embedding recall → >0.85 merge,
-// 0.5~0.85 relate edge, else create.
+// 0.5~0.85 relate edge, else create. Returns the touched interest points AND
+// the ids of archived historical points (relation delete/supersede) so the
+// reconcile stage can cascade to their wiki pages.
 type Cleaner interface {
-	Clean(ctx context.Context, agentID string, verified []verify.Verified) ([]store.InterestPoint, error)
+	Clean(ctx context.Context, agentID string, verified []verify.Verified) ([]store.InterestPoint, []string, error)
 }
 
 type cleaner struct {
@@ -64,34 +66,38 @@ func New(embedder Embedder, vi VectorIndex, st Store, cfg config.ForkConfig) Cle
 
 // Clean processes each candidate: embed, recall historical points by
 // similarity, then merge / relate / create. Returns the persisted interest
-// points touched this run.
-func (c *cleaner) Clean(ctx context.Context, agentID string, verified []verify.Verified) ([]store.InterestPoint, error) {
+// points touched this run and the archived historical point ids.
+func (c *cleaner) Clean(ctx context.Context, agentID string, verified []verify.Verified) ([]store.InterestPoint, []string, error) {
 	var out []store.InterestPoint
+	var archived []string
 	for _, v := range verified {
-		pt, err := c.process(ctx, agentID, v)
+		pt, arch, err := c.process(ctx, agentID, v)
 		if err != nil {
-			return out, fmt.Errorf("interest: clean: %w", err)
+			return out, archived, fmt.Errorf("interest: clean: %w", err)
+		}
+		if arch != "" {
+			archived = append(archived, arch)
 		}
 		if pt != nil {
 			out = append(out, *pt)
 		}
 	}
-	return out, nil
+	return out, archived, nil
 }
 
-func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified) (*store.InterestPoint, error) {
+func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified) (*store.InterestPoint, string, error) {
 	text := v.Candidate.Topic
 	if v.Candidate.Reason != "" {
 		text += "\n" + v.Candidate.Reason
 	}
 	vecV, err := c.embedder.Embed(ctx, text)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	hits, err := c.vec.Search(ctx, agentID, vecV, c.topK)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var best *vec.Hit
 	var bestSim float32
@@ -114,44 +120,44 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 	case verify.RelationDelete:
 		if v.RelationToID != "" {
 			if err := c.archive(ctx, agentID, v.RelationToID); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
-		return nil, nil
+		return nil, v.RelationToID, nil
 	case verify.RelationSupersede:
 		if v.RelationToID != "" {
 			if err := c.archive(ctx, agentID, v.RelationToID); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
 		created, err := c.create(ctx, agentID, v, vecV, now)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if v.RelationToID != "" {
 			if err := c.store.AddEdgePair(ctx, agentID, store.Edge{
 				SourceID: v.RelationToID, TargetID: created.ID,
 				Kind: store.EdgeSequel, Weight: 1,
 			}); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
-		return created, nil
+		return created, v.RelationToID, nil
 	case verify.RelationUpdate:
 		if v.RelationToID != "" {
 			existing, err := c.store.GetInterestPoint(ctx, agentID, v.RelationToID)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if existing != nil {
 				merged := c.merge(existing, v)
 				if err := c.store.UpsertInterestPoint(ctx, merged); err != nil {
-					return nil, err
+					return nil, "", err
 				}
 				if err := c.vec.Upsert(ctx, c.entryFor(merged, vecV)); err != nil {
-					return nil, err
+					return nil, "", err
 				}
-				return &merged, nil
+				return &merged, "", nil
 			}
 		}
 		// Historical point vanished: fall through to the default path.
@@ -163,31 +169,33 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 		existing, err := c.store.GetInterestPoint(ctx, agentID, best.ID)
 		if err != nil || existing == nil {
 			// Stale vector: create fresh instead.
-			return c.create(ctx, agentID, v, vecV, now)
+			pt, err := c.create(ctx, agentID, v, vecV, now)
+			return pt, "", err
 		}
 		merged := c.merge(existing, v)
 		if err := c.store.UpsertInterestPoint(ctx, merged); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if err := c.vec.Upsert(ctx, c.entryFor(merged, vecV)); err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return &merged, nil
+		return &merged, "", nil
 
 	case best != nil && float64(bestSim) >= c.cfg.SimilarityRelate:
 		// Relate the new candidate to the historical one, then create.
 		created, err := c.create(ctx, agentID, v, vecV, now)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		edge := store.Edge{SourceID: created.ID, TargetID: best.ID, Kind: store.EdgeRelated, Weight: float64(bestSim)}
 		if err := c.store.AddEdgePair(ctx, agentID, edge); err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return created, nil
+		return created, "", nil
 
 	default:
-		return c.create(ctx, agentID, v, vecV, now)
+		pt, err := c.create(ctx, agentID, v, vecV, now)
+		return pt, "", err
 	}
 }
 

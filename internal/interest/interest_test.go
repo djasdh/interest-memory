@@ -66,7 +66,7 @@ func vv(topic string, conf float64) verify.Verified {
 func TestCleanCreatesNew(t *testing.T) {
 	st := newFakeStore()
 	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("brand new topic", 0.9)})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("brand new topic", 0.9)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestCleanStoresTurnRange(t *testing.T) {
 	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
 	v := vv("带轮次的主题", 0.8)
 	v.Candidate.TurnRange = [2]int{2, 7}
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCleanMergesHighSimilarity(t *testing.T) {
 	st.ip["existing-id"] = existing
 	fv := &fakeVec{hits: []vec.Hit{{ID: "existing-id", AgentID: "agent-a", Kind: "interest_point", Score: 0.95}}}
 	c := New(fakeEmbedder{}, fv, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("old topic updated", 0.9)})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("old topic updated", 0.9)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestCleanRelatesMediumSimilarity(t *testing.T) {
 	st := newFakeStore()
 	fv := &fakeVec{hits: []vec.Hit{{ID: "existing-id", AgentID: "agent-a", Kind: "interest_point", Score: 0.6}}}
 	c := New(fakeEmbedder{}, fv, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("related topic", 0.8)})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("related topic", 0.8)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestCleanCreatesOnLowSimilarity(t *testing.T) {
 	st := newFakeStore()
 	fv := &fakeVec{hits: []vec.Hit{{ID: "existing-id", AgentID: "agent-a", Kind: "interest_point", Score: 0.1}}}
 	c := New(fakeEmbedder{}, fv, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("totally different", 0.7)})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{vv("totally different", 0.7)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestCleanRelationDeleteArchivesOld(t *testing.T) {
 	st.ip["old1"] = old
 	fv := &fakeVec{}
 	c := New(fakeEmbedder{}, fv, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
 		vvRel("新观点", verify.RelationDelete, "old1", "用户推翻旧观点"),
 	})
 	if err != nil {
@@ -200,7 +200,7 @@ func TestCleanRelationSupersedeArchivesAndCreates(t *testing.T) {
 	st.ip["old1"] = old
 	fv := &fakeVec{}
 	c := New(fakeEmbedder{}, fv, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
 		vvRel("新观点", verify.RelationSupersede, "old1", "取代旧观点"),
 	})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestCleanRelationUpdateMergesIntoOld(t *testing.T) {
 	st := newFakeStore()
 	st.ip["old1"] = old
 	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{
 		vvRel("旧偏好更新", verify.RelationUpdate, "old1", "补充细节"),
 	})
 	if err != nil {
@@ -268,7 +268,7 @@ func TestCleanSubjectivePropagatesToCreated(t *testing.T) {
 	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
 	v := vv("喜欢 Go", 0.8)
 	v.Subjective = true
-	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
 	if err != nil {
 		t.Fatal(err)
 	}

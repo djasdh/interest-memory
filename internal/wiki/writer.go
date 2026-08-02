@@ -21,6 +21,9 @@ import (
 type Compiler interface {
 	Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error)
 	RebuildEdges(ctx context.Context, agentID string) error
+	// ReconcileRelated propagates structural changes (written/updated pages,
+	// archived interest points) to related pages within maxHops, in batches.
+	ReconcileRelated(ctx context.Context, agentID string, in ReconcileInput, maxHops, batchSize int) error
 }
 
 // ProviderFactory builds the my-agent-core provider from config (used by the

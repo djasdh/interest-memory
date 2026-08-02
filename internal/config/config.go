@@ -15,7 +15,14 @@ type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	Fork      ForkConfig      `yaml:"fork"`
 	Verify    VerifyConfig    `yaml:"verify"`
+	Wiki      WikiConfig      `yaml:"wiki"`
 	Recall    RecallConfig    `yaml:"recall"`
+}
+
+// WikiConfig controls the wiki writing / reconcile stage.
+type WikiConfig struct {
+	MaxHops   int `yaml:"max_hops"`   // 协同图传播深度
+	BatchSize int `yaml:"batch_size"` // 协同 agent loop 每批相关页数
 }
 
 // VerifyConfig controls the correction layer (verify#1 fact-checking).
@@ -98,6 +105,10 @@ func Default() Config {
 			SearchMax:      5,
 			WebTool:        "myagent",
 			MaxConcurrency: 4,
+		},
+		Wiki: WikiConfig{
+			MaxHops:   3,
+			BatchSize: 10,
 		},
 		Recall: RecallConfig{
 			TopK:        8,
