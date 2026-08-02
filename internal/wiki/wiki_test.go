@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"interest-memory/internal/llm"
@@ -343,6 +344,44 @@ func TestWriteToolWithoutSourcesOK(t *testing.T) {
 	pg, _ := st.GetPage(ctx, "agent-a", "no-src")
 	if pg == nil || len(pg.Sources) != 0 {
 		t.Errorf("sources should be empty when not provided: %+v", pg)
+	}
+}
+
+func TestTagsToolReturnsExistingTags(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	for i, tags := range [][]string{{"go", "database"}, {"go", "backend"}} {
+		if err := st.UpsertPage(ctx, store.Page{ID: "pg" + string(rune('a'+i)), AgentID: "agent-a", Title: "T", BodyMD: "x", Tags: tags}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := NewTagsTool(deps, "agent-a")
+	if tool.Name != "wiki_tags" {
+		t.Errorf("name = %q, want wiki_tags", tool.Name)
+	}
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{}, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, want := range []string{"go", "database", "backend"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing tag %q\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "2") {
+		t.Errorf("output should show go count 2\n%s", out)
+	}
+}
+
+func TestTagsToolEmptyOK(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	tool := NewTagsTool(deps, "agent-a")
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{}, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if out == "" {
+		t.Fatal("empty output")
 	}
 }
 

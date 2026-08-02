@@ -78,6 +78,7 @@ func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, to
 func (w *Writer) toolsFor(agentID string) []types.Tool {
 	return []types.Tool{
 		NewQueryTool(w.deps, agentID),
+		NewTagsTool(w.deps, agentID),
 		NewVerifyClaimsTool(w.deps),
 		NewReviewTool(w.deps, agentID),
 		NewWriteTool(w.deps, agentID),

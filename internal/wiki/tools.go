@@ -605,6 +605,33 @@ Return ONLY valid JSON:
 	return string(out) + "\n", nil
 }
 
+// NewTagsTool returns the wiki_tags tool: a read-only listing of all tags
+// already used by this agent (with usage counts). The agent consults it
+// before writing so it reuses the existing tag taxonomy instead of inventing
+// near-duplicate tags.
+func NewTagsTool(deps ToolsDeps, agentID string) types.Tool {
+	return types.Tool{
+		Name:        "wiki_tags",
+		Description: "List all tags already used in this agent's wiki (with usage counts). Call this before writing to reuse existing tags from the taxonomy instead of creating duplicates. Read-only.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Execute: func(_ types.Context, _ types.ArgsMap, _ <-chan struct{}) (string, error) {
+			tags, err := deps.Store.ListTags(context.Background(), agentID)
+			if err != nil {
+				return "", fmt.Errorf("wiki_tags: %w", err)
+			}
+			if len(tags) == 0 {
+				return "(wiki: no tags used yet — you may introduce new tags)\n", nil
+			}
+			var b strings.Builder
+			b.WriteString("Existing tags (count):\n")
+			for _, tc := range tags {
+				b.WriteString(fmt.Sprintf("- %s (%d)\n", tc.Tag, tc.Count))
+			}
+			return b.String(), nil
+		},
+	}
+}
+
 // claimID derives a stable id for a claim from its page + text.
 func claimID(agentID, pageID, text string) string {
 	h := sha256.Sum256([]byte(agentID + "|" + pageID + "|" + text))
