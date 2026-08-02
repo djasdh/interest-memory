@@ -20,6 +20,7 @@ type Service interface {
 	Recall(ctx context.Context, agentID, query string) (string, error)
 	Search(ctx context.Context, agentID, query string, topK int) ([]recall.Result, error)
 	GetByID(ctx context.Context, agentID, id string) (*recall.Result, error)
+	ListLogs(ctx context.Context, agentID string, limit, offset int) ([]store.ChangeLog, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]store.InterestPoint, error)
 	ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error)
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
@@ -58,6 +59,7 @@ func (s *Server) Routes() []Route {
 		{Pattern: "GET /api/v1/{agent}/interest-points", Handler: s.handleInterestPoints},
 		{Pattern: "GET /api/v1/{agent}/wiki/pages", Handler: s.handleWikiPages},
 		{Pattern: "GET /api/v1/{agent}/search", Handler: s.handleSearch},
+		{Pattern: "GET /api/v1/{agent}/logs", Handler: s.handleLogs},
 		{Pattern: "POST /api/v1/{agent}/fork", Handler: s.handleFork},
 		{Pattern: "GET /api/v1/{agent}/jobs/{id}", Handler: s.handleJob},
 		{Pattern: "GET /api/v1/{agent}/stats", Handler: s.handleStats},
@@ -181,6 +183,33 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		items = []recall.Result{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleLogs serves change-log queries: ?limit=&offset= pagination (newest
+// first). Default limit 50.
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	agent := r.PathValue("agent")
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	logs, err := s.svc.ListLogs(r.Context(), agent, limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list logs: "+err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []store.ChangeLog{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": logs})
 }
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {

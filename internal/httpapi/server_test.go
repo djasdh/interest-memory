@@ -24,6 +24,7 @@ type fakeService struct {
 	forkTx    *store.Transcript
 	searchRes []recall.Result
 	byIDRes   *recall.Result
+	logs      []store.ChangeLog
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
@@ -44,6 +45,9 @@ func (f *fakeService) Search(_ context.Context, _, _ string, _ int) ([]recall.Re
 }
 func (f *fakeService) GetByID(_ context.Context, _, _ string) (*recall.Result, error) {
 	return f.byIDRes, nil
+}
+func (f *fakeService) ListLogs(_ context.Context, _ string, _, _ int) ([]store.ChangeLog, error) {
+	return f.logs, nil
 }
 
 // fakeWorker implements Worker for handler tests.
@@ -274,6 +278,32 @@ func TestSearchRequiresQueryOrId(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestLogsEndpoint(t *testing.T) {
+	fs := &fakeService{logs: []store.ChangeLog{
+		{ID: "l1", AgentID: "agent-a", Action: "create", Title: "P1"},
+	}}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/logs?limit=10&offset=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("logs status = %d", resp.StatusCode)
+	}
+	var body struct {
+		Items []store.ChangeLog `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ID != "l1" || body.Items[0].Title != "P1" {
+		t.Errorf("items = %+v", body.Items)
 	}
 }
 
