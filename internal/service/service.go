@@ -13,6 +13,7 @@ import (
 	"interest-memory/internal/transcript"
 	"interest-memory/internal/vec"
 	"interest-memory/internal/verify"
+	"interest-memory/internal/websearch"
 	"interest-memory/internal/wiki"
 
 	"my-agent-core/provider"
@@ -23,27 +24,33 @@ import (
 // domain services together and exposes the operations the worker queue and
 // HTTP layer call.
 type Service struct {
-	cfg     config.Config
-	store   store.Store
-	fork    fork.ForkAnalyzer
-	verify  verify.Verifier
+	cfg      config.Config
+	store    store.Store
+	fork     fork.ForkAnalyzer
+	verify   verify.Verifier
 	interest interest.Cleaner
-	wiki    wiki.Compiler
-	recall  recall.RecallService
+	wiki     wiki.Compiler
+	recall   recall.RecallService
 }
 
-// New wires the domain services from config + infrastructure.
+// New wires the domain services from config + infrastructure. extraWebTools
+// are optional additional network tools registered alongside the default
+// "myagent" tool (selected via verify.web_tool).
 func New(
 	cfg config.Config,
 	st store.Store,
 	vi vec.VectorIndex,
 	llmClient *llm.Client,
 	embedder *llm.Embedder,
+	extraWebTools ...websearch.Tool,
 ) *Service {
-	verifier := verify.New(llmClient, st, newWebSearchSearcher(cfg.Verify), verify.Config{
-		UseWebSearch: cfg.Verify.UseWebSearch,
-		SearchMax:    cfg.Verify.SearchMax,
-		LLM:          cfg.LLM,
+	reg := newWebSearchRegistry(cfg.Verify, extraWebTools...)
+	verifier := verify.New(llmClient, st, reg, vi, embedder, verify.Config{
+		UseWebSearch:   cfg.Verify.UseWebSearch,
+		SearchMax:      cfg.Verify.SearchMax,
+		WebTool:        cfg.Verify.WebTool,
+		LLM:            cfg.LLM,
+		MaxConcurrency: cfg.Verify.MaxConcurrency,
 	})
 
 	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder}

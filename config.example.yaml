@@ -17,9 +17,11 @@ embedding:
   model: BAAI/bge-m3
   dimensions: 1024
 
-# 分叉分析（会话末按窗口）
+# 分叉分析（会话末按 user 回合的前缀窗口）
 fork:
-  window_turns: 10              # 固定轮数窗口
+  prefix_step: 5                # 每 5 个 user 回合为一个前缀窗口步长（少于 5 不切分）
+  max_windows: 8                # 前缀窗口上限（超限保留最长的 N 个）
+  max_concurrency: 4            # 窗口提取并行度
   similarity_merge: 0.85        # 与历史兴趣点去重合并阈值
   similarity_relate: 0.50       # 关联建边阈值
   importance_boost_per_seen: 0.05  # 每次再见到时的 importance 增幅
@@ -28,8 +30,10 @@ fork:
 
 # 纠错核查（verify#1）
 verify:
-  use_web_search: true           # 是否用 web_search 做事实核查（失败降级不阻断）
+  use_web_search: true           # 是否用网络工具做事实核查（失败降级不阻断）
   search_max: 5                  # 每个候选的最大搜索结果数
+  web_tool: myagent              # 网络工具名（registry 中 active；默认 myagent=my-agent-core 12 provider）
+  max_concurrency: 4             # 候选核查并行度
 
 # RAG 召回
 recall:
