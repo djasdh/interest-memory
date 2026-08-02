@@ -233,7 +233,18 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The store uses a single SQLite connection (SetMaxOpenConns(1)); the
+	// scan rows above must be fully closed before issuing per-page claim
+	// queries, otherwise the new query blocks forever waiting for the conn.
+	rows.Close()
+	for i := range out {
+		claims, _ := s.ListClaims(ctx, agentID, out[i].ID)
+		out[i].Claims = claims
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) SearchPagesByKeywords(ctx context.Context, agentID, query string, limit int) ([]Page, error) {

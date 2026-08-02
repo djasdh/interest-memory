@@ -41,8 +41,18 @@ type SearchConfig struct {
 
 // WikiConfig controls the wiki writing / reconcile stage.
 type WikiConfig struct {
-	MaxHops   int `yaml:"max_hops"`   // 协同图传播深度
-	BatchSize int `yaml:"batch_size"` // 协同 agent loop 每批相关页数
+	MaxHops   int    `yaml:"max_hops"`   // 协同图传播深度
+	BatchSize int    `yaml:"batch_size"` // 协同 agent loop 每批相关页数
+	Language  string `yaml:"language"`   // wiki 页面输出语言（默认中文）
+}
+
+// OutputLanguage returns the configured wiki output language, defaulting to
+// Chinese when unset.
+func (c WikiConfig) OutputLanguage() string {
+	if c.Language == "" {
+		return "中文"
+	}
+	return c.Language
 }
 
 // VerifyConfig controls the correction layer (verify#1 fact-checking).

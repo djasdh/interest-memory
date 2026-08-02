@@ -29,6 +29,19 @@ type Store interface {
 	Backlinks(ctx context.Context, agentID, targetID string) ([]Edge, error)
 	DeleteEdgesFor(ctx context.Context, agentID, sourceID string) error
 
+	// ---- pending links (死链反馈) ----
+	// RecordPendingLink notes a [[target]] in page sourceID that has no
+	// matching page yet (dead link). Upsert semantics: repeated calls for the
+	// same pair update the timestamp, not duplicate.
+	RecordPendingLink(ctx context.Context, agentID, sourceID, target string) error
+	// ClearPendingLink removes a resolved pending link (its target page now
+	// exists). No-op when absent.
+	ClearPendingLink(ctx context.Context, agentID, sourceID, target string) error
+	// DeletePendingLinksFor removes all pending links for a source page
+	// (used by RebuildEdges to refresh the dead-link set from current body).
+	DeletePendingLinksFor(ctx context.Context, agentID, sourceID string) error
+	ListPendingLinks(ctx context.Context, agentID string) ([]PendingLink, error)
+
 	// ---- claims ----
 	UpsertClaim(ctx context.Context, c Claim) error
 	ListClaims(ctx context.Context, agentID, pageID string) ([]Claim, error)

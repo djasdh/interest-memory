@@ -578,7 +578,7 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWriter(deps, nil)
+	w := NewWriter(deps, nil, "中文")
 	if err := w.RebuildEdges(ctx, "agent-a"); err != nil {
 		t.Fatalf("RebuildEdges: %v", err)
 	}
@@ -589,6 +589,31 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 	// page-c doesn't exist → only page-b edge survives.
 	if len(edges) != 1 || edges[0].TargetID != "page-b" || edges[0].Kind != store.EdgeReference {
 		t.Errorf("outlinks = %+v", edges)
+	}
+	// Dead link feedback: page-c is recorded as pending.
+	pending, err := st.ListPendingLinks(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].SourceID != "page-a" || pending[0].Target != "page-c" {
+		t.Errorf("pending links = %+v, want page-a→page-c", pending)
+	}
+
+	// Resolving the target clears the pending record and adds the edge.
+	if err := st.UpsertPage(ctx, store.Page{ID: "page-c", AgentID: "agent-a",
+		Title: "C", PageType: store.PageConcept, BodyMD: "c", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RebuildEdges(ctx, "agent-a"); err != nil {
+		t.Fatalf("RebuildEdges (2nd): %v", err)
+	}
+	pending2, _ := st.ListPendingLinks(ctx, "agent-a")
+	if len(pending2) != 0 {
+		t.Errorf("pending after resolve = %+v, want empty", pending2)
+	}
+	edges2, _ := st.Outlinks(ctx, "agent-a", "page-a")
+	if len(edges2) != 2 {
+		t.Errorf("outlinks after resolve = %+v, want 2 (page-b + page-c)", edges2)
 	}
 }
 

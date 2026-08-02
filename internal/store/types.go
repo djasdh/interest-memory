@@ -92,6 +92,16 @@ type TagCount struct {
 	Count int    `json:"count"`
 }
 
+// PendingLink records a [[target]] wikilink in page sourceID whose target
+// page does not exist yet (dead link). Used by RebuildEdges as a feedback
+// loop so dead links are visible instead of silently dropped.
+type PendingLink struct {
+	AgentID   string    `json:"agent_id"`
+	SourceID  string    `json:"source_id"`
+	Target    string    `json:"target"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Claim is a structured belief with evidence (纠错层核心）。
 type Claim struct {
 	ID         string     `json:"id"`

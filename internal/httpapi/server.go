@@ -24,6 +24,7 @@ type Service interface {
 	ListLogs(ctx context.Context, agentID string, limit, offset int) ([]store.ChangeLog, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]store.InterestPoint, error)
 	ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error)
+	ListPendingLinks(ctx context.Context, agentID string) ([]store.PendingLink, error)
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
 	ForkManual(ctx context.Context, agentID string) (*store.Transcript, error)
 }
@@ -59,6 +60,7 @@ func (s *Server) Routes() []Route {
 		{Pattern: "GET /api/v1/{agent}/recall", Handler: s.handleRecall},
 		{Pattern: "GET /api/v1/{agent}/interest-points", Handler: s.handleInterestPoints},
 		{Pattern: "GET /api/v1/{agent}/wiki/pages", Handler: s.handleWikiPages},
+		{Pattern: "GET /api/v1/{agent}/pending-links", Handler: s.handlePendingLinks},
 		{Pattern: "GET /api/v1/{agent}/search", Handler: s.handleSearch},
 		{Pattern: "GET /api/v1/{agent}/logs", Handler: s.handleLogs},
 		{Pattern: "POST /api/v1/{agent}/fork", Handler: s.handleFork},
@@ -167,6 +169,21 @@ func (s *Server) handleWikiPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": pages})
+}
+
+// handlePendingLinks serves dead-link feedback: [[target]] wikilinks whose
+// target page does not exist yet.
+func (s *Server) handlePendingLinks(w http.ResponseWriter, r *http.Request) {
+	agent := r.PathValue("agent")
+	links, err := s.svc.ListPendingLinks(r.Context(), agent)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list pending links: "+err.Error())
+		return
+	}
+	if links == nil {
+		links = []store.PendingLink{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": links})
 }
 
 // handleSearch serves the consumer-side memory_search tool: ?query= does a

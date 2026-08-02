@@ -48,11 +48,13 @@ type Writer struct {
 
 // NewWriter builds a Writer. deps carries store/vec/embedder/llm/searcher;
 // prov builds the LLM provider lazily per call so tests can inject a fake.
-func NewWriter(deps ToolsDeps, prov ProviderFactory) *Writer {
-	return &Writer{
-		deps: deps,
-		prov: prov,
-		system: `你是一个 wiki 编辑助手。你为单个兴趣点撰写或更新一个 wiki 页面。
+// lang is the output language hint injected into the system prompt
+// (default "中文").
+func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string) *Writer {
+	if lang == "" {
+		lang = "中文"
+	}
+	system := `你是一个 wiki 编辑助手。你为单个兴趣点撰写或更新一个 wiki 页面。
 流程（必须遵守）：
 1. 用 wiki_query 检查是否已有相关页面；已有则用其 id 更新，而非新建
 2. 撰写页面内容（markdown，可含 [[wikilink]] 双链指向相关页）
@@ -60,7 +62,18 @@ func NewWriter(deps ToolsDeps, prov ProviderFactory) *Writer {
 4. 正式写入前，必须调用 review 工具审查 draft，采纳合理建议
 5. 用 wiki_write 写入：page_type=concept，传 interest_point_id（本兴趣点 id），
    提供恰当的 tags、edges、claims
-6. 输出简洁准确，不要写无意义内容`,
+6. 输出简洁准确，不要写无意义内容
+
+语言：所有页面内容（标题、正文、相关链接）一律使用「` + lang + `」输出。标题中的英文专有名词（如项目名、工具名）可保留原文，但解释性文字必须使用该语言。
+
+链接规则（必须遵守）：
+- [[wikilink]] 的目标必须是 wiki_query 查到的、已存在页面的 id（如 [[pipeline-vs-agent-loop]]），
+  禁止链接工具名（如 [[verify_claims]]）、外部概念（如 [[PostgreSQL]]）、抽象标签（如 [[design-decision]]）或本 wiki 中不存在的页面。
+- 如果相关概念在本 wiki 中没有页面，不要用 [[]] 链接它，直接在正文中用普通文本提及。`
+	return &Writer{
+		deps: deps,
+		prov: prov,
+		system: system,
 		timeout: 10 * time.Minute,
 		runLoop: defaultRunLoop,
 	}
@@ -288,6 +301,11 @@ func (w *Writer) RebuildEdges(ctx context.Context, agentID string) error {
 		if err := w.deps.Store.DeleteEdgesFor(ctx, agentID, p.ID); err != nil {
 			return fmt.Errorf("wiki: rebuild: delete edges: %w", err)
 		}
+		// Refresh the pending (dead-link) set for this page: clear prior
+		// records so removed links don't linger, then re-record current ones.
+		if err := w.deps.Store.DeletePendingLinksFor(ctx, agentID, p.ID); err != nil {
+			return fmt.Errorf("wiki: rebuild: delete pending links: %w", err)
+		}
 		links := ExtractWikilinks(full.BodyMD)
 		for _, target := range links {
 			if target == p.ID {
@@ -295,8 +313,13 @@ func (w *Writer) RebuildEdges(ctx context.Context, agentID string) error {
 			}
 			existing, err := w.deps.Store.GetPage(ctx, agentID, target)
 			if err != nil || existing == nil {
+				// Dead link: record it so the feedback loop can surface
+				// (pending links) instead of silently dropping it.
+				_ = w.deps.Store.RecordPendingLink(ctx, agentID, p.ID, target)
 				continue
 			}
+			// Resolved: the target now exists — clear any prior pending record.
+			_ = w.deps.Store.ClearPendingLink(ctx, agentID, p.ID, target)
 			_ = w.deps.Store.AddEdgePair(ctx, agentID, store.Edge{
 				SourceID:  p.ID,
 				TargetID:  target,

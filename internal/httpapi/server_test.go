@@ -45,6 +45,9 @@ func (f *fakeService) ListInterestPoints(context.Context, string) ([]store.Inter
 func (f *fakeService) ListPages(context.Context, string, store.PageType) ([]store.Page, error) {
 	return f.pages, nil
 }
+func (f *fakeService) ListPendingLinks(context.Context, string) ([]store.PendingLink, error) {
+	return nil, nil
+}
 func (f *fakeService) Stats(context.Context, string) (map[string]int, error) { return f.stats, nil }
 func (f *fakeService) ForkManual(context.Context, string) (*store.Transcript, error) {
 	return f.forkTx, nil

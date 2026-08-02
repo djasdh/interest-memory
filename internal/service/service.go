@@ -67,7 +67,7 @@ func New(
 		fork:     fork.NewAnalyzer(llmClient, cfg.Fork),
 		verify:   verifier,
 		interest: interest.New(embedder, vi, st, cfg.Fork),
-		wiki:     wiki.NewWriter(wikiDeps, wikiProv),
+		wiki:     wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage()),
 		recall:   recall.New(embedder, vi, st, verifier),
 	}
 }
@@ -222,6 +222,11 @@ func (s *Service) ListInterestPoints(ctx context.Context, agentID string) ([]sto
 // ListPages returns wiki pages for an agent, optionally filtered by type.
 func (s *Service) ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error) {
 	return s.store.ListPages(ctx, agentID, pageType)
+}
+
+// ListPendingLinks returns dead-link records for an agent.
+func (s *Service) ListPendingLinks(ctx context.Context, agentID string) ([]store.PendingLink, error) {
+	return s.store.ListPendingLinks(ctx, agentID)
 }
 
 // Stats returns simple counts for an agent.

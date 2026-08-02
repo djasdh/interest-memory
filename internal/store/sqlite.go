@@ -131,6 +131,13 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			agent_id TEXT NOT NULL,
 			PRIMARY KEY (agent_id, source_id, target_id, kind)
 		)`,
+		`CREATE TABLE IF NOT EXISTS pending_links (
+			agent_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			target TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (agent_id, source_id, target)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(agent_id, target_id)`,
 		`CREATE TABLE IF NOT EXISTS claims (
 			id TEXT NOT NULL,
