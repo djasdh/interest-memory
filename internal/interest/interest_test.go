@@ -3,6 +3,7 @@ package interest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"interest-memory/internal/config"
 	"interest-memory/internal/fork"
@@ -125,6 +126,21 @@ func TestInterestLogsSupersedeWithSequelEdge(t *testing.T) {
 	}
 	if len(supersede.Edges) != 1 || supersede.Edges[0].Kind != store.EdgeSequel || supersede.Edges[0].SourceID != "old1" {
 		t.Errorf("supersede edges = %+v", supersede.Edges)
+	}
+}
+
+func TestCleanStoresEventTime(t *testing.T) {
+	st := newFakeStore()
+	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
+	v := vv("带时间的主题", 0.8)
+	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	v.Candidate.EventTime = et
+	out, _, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || !out[0].EventTime.Equal(et) {
+		t.Errorf("event_time = %v, want %v", out[0].EventTime, et)
 	}
 }
 
