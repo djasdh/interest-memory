@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
@@ -25,10 +26,14 @@ type fakeService struct {
 	searchRes []recall.Result
 	byIDRes   *recall.Result
 	logs      []store.ChangeLog
+	savedTx   *store.Transcript
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
-func (f *fakeService) SaveTranscript(context.Context, store.Transcript) error         { return f.saveErr }
+func (f *fakeService) SaveTranscript(_ context.Context, t store.Transcript) error {
+	f.savedTx = &t
+	return f.saveErr
+}
 func (f *fakeService) Recall(_ context.Context, _, _ string) (string, error)          { return f.recallOut, nil }
 func (f *fakeService) ListInterestPoints(context.Context, string) ([]store.InterestPoint, error) {
 	return f.pts, nil
@@ -83,6 +88,49 @@ func TestSessionsEnqueue(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&out)
 	if out["job_id"] != "job-1" {
 		t.Errorf("job_id = %q", out["job_id"])
+	}
+}
+
+func TestSessionsParsesSessionDate(t *testing.T) {
+	fs := &fakeService{}
+	fw := &fakeWorker{jobID: "job-1"}
+	ts := newTestServer(fs, fw)
+	defer ts.Close()
+
+	body := `{"session_id":"s1","turn_count":2,"raw_turns":"[]","session_date":"2026-08-01T10:00:00Z"}`
+	resp, err := http.Post(ts.URL+"/api/v1/agent-a/sessions", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if fs.savedTx == nil || fs.savedTx.SessionDate == nil {
+		t.Fatalf("session_date not parsed: %+v", fs.savedTx)
+	}
+	want := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	if !fs.savedTx.SessionDate.Equal(want) {
+		t.Errorf("session_date = %v, want %v", fs.savedTx.SessionDate, want)
+	}
+}
+
+func TestSessionsIgnoresInvalidSessionDate(t *testing.T) {
+	fs := &fakeService{}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	body := `{"session_id":"s1","turn_count":2,"raw_turns":"[]","session_date":"not-a-date"}`
+	resp, err := http.Post(ts.URL+"/api/v1/agent-a/sessions", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if fs.savedTx == nil || fs.savedTx.SessionDate != nil {
+		t.Errorf("invalid session_date should be ignored: %+v", fs.savedTx)
 	}
 }
 

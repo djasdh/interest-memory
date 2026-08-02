@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
@@ -93,8 +94,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		TurnCount: req.TurnCount,
 		RawTurns:  req.RawTurns,
 	}
-	// ReceivedAt is set by SaveTranscript? No — fill here.
+	// ReceivedAt is the server-side receive time.
 	tx.ReceivedAt = timeNow()
+	// SessionDate is the client-passed session start time (RFC3339, optional).
+	if req.SessionDate != "" {
+		if t, err := time.Parse(time.RFC3339, req.SessionDate); err == nil {
+			utc := t.UTC()
+			tx.SessionDate = &utc
+		}
+	}
 	if err := s.svc.SaveTranscript(r.Context(), tx); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save transcript: "+err.Error())
 		return
