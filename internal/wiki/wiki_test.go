@@ -250,6 +250,62 @@ func TestWriteToolDefaultStatusActive(t *testing.T) {
 	}
 }
 
+func TestWriteToolLogsPageCreate(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	// Edge target must exist for validation.
+	if err := st.UpsertPage(ctx, store.Page{ID: "pg2", AgentID: "agent-a", Title: "P2", BodyMD: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                "pg1",
+		"title":             "P1",
+		"content":           "内容",
+		"page_type":         "concept",
+		"interest_point_id": "ip-1",
+		"edges": []any{map[string]any{
+			"target_id": "pg2",
+			"type":      "related",
+		}},
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	logs, err := st.ListLogs(ctx, "agent-a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	l := logs[0]
+	if l.Action != "create" || l.EntityKind != "wiki_page" || l.EntityID != "pg1" || l.Title != "P1" {
+		t.Errorf("log = %+v", l)
+	}
+	kinds := map[store.EdgeType]bool{}
+	for _, e := range l.Edges {
+		kinds[e.Kind] = true
+	}
+	if !kinds[store.EdgeHasPage] || !kinds[store.EdgeRelated] {
+		t.Errorf("log edges = %+v, want has_page + related", l.Edges)
+	}
+}
+
+func TestWriteToolLogsStatusChange(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id": "old-page", "title": "Old", "content": "x", "status": "superseded",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	logs, _ := st.ListLogs(ctx, "agent-a", 0, 0)
+	if len(logs) != 1 || logs[0].Action != "superseded" {
+		t.Errorf("logs = %+v, want action=superseded", logs)
+	}
+}
+
 func TestWriteToolCreateAndUpdate(t *testing.T) {
 	deps, st, _ := newTestDeps(t)
 	ctx := context.Background()

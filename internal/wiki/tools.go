@@ -337,6 +337,31 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		}
 	}
 
+	// Change log: page action + structural edges (has_page/related/
+	// contradicts/sequel; references excluded).
+	logAction := "create"
+	if existing != nil {
+		logAction = "update"
+	}
+	if status != "active" {
+		logAction = status // superseded | archived
+	}
+	var logEdges []store.LogEdge
+	if interestPointID != "" {
+		logEdges = append(logEdges, store.LogEdge{Action: "add", SourceID: interestPointID, TargetID: id, Kind: store.EdgeHasPage, Weight: 1})
+	}
+	for _, e := range edges {
+		kind := store.EdgeType(e.Type)
+		if kind != store.EdgeHasPage && kind != store.EdgeRelated && kind != store.EdgeContradict && kind != store.EdgeSequel {
+			continue
+		}
+		logEdges = append(logEdges, store.LogEdge{Action: "add", SourceID: id, TargetID: e.TargetID, Kind: kind, Weight: 1})
+	}
+	_ = deps.Store.AppendLog(ctx, store.ChangeLog{
+		AgentID: agentID, EntityKind: "wiki_page", EntityID: id, Title: title,
+		Action: logAction, Edges: logEdges,
+	})
+
 	// Embedding (best-effort: failure does not abort the write).
 	if deps.Embedder != nil && deps.Vec != nil {
 		embedText := title + "\n" + content
