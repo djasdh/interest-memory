@@ -2,10 +2,13 @@ package wiki
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
+	"interest-memory/internal/websearch"
 
 	"my-agent-core/types"
 )
@@ -29,6 +32,92 @@ type fakeEmbedder struct{}
 func (fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 	return []float32{0.1, 0.2, 0.3}, nil
 }
+
+type fakeSearcher struct {
+	items []websearch.SearchItem
+	err   error
+	calls int
+}
+
+func (f *fakeSearcher) Search(_ context.Context, _ string, _ int) ([]websearch.SearchItem, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.items, nil
+}
+
+type fakeLLM struct {
+	resp  any
+	err   error
+	calls int
+}
+
+func (f *fakeLLM) ChatJSON(_ context.Context, _ []llm.Message, out any) error {
+	f.calls++
+	if f.err != nil {
+		return f.err
+	}
+	b, _ := json.Marshal(f.resp)
+	return json.Unmarshal(b, out)
+}
+
+func TestVerifyClaimsToolAuditsText(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "u", Snippet: "s"}}}
+	l := &fakeLLM{resp: map[string]any{"status": "supported", "confidence": 0.9, "evidence": []string{"matches"}}}
+	deps.Search = se
+	deps.LLM = l
+
+	tool := NewVerifyClaimsTool(deps)
+	if tool.Name != "verify_claims" {
+		t.Errorf("tool name = %q, want verify_claims", tool.Name)
+	}
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{"text": "PostgreSQL 支持 JSONB"}, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if se.calls != 1 || l.calls != 1 {
+		t.Errorf("searcher=%d llm=%d, want 1/1", se.calls, l.calls)
+	}
+	if out == "" {
+		t.Fatal("empty output")
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if got["status"] != "supported" {
+		t.Errorf("status = %v, want supported", got["status"])
+	}
+}
+
+func TestVerifyClaimsToolDegradesWithoutSearch(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	l := &fakeLLM{resp: map[string]any{"status": "unknown"}}
+	deps.LLM = l
+
+	tool := NewVerifyClaimsTool(deps)
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{"text": "某个说法"}, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected degraded (non-error) output")
+	}
+	if l.calls != 1 {
+		t.Errorf("llm calls = %d, want 1 (verdict still asked)", l.calls)
+	}
+}
+
+func TestVerifyClaimsToolDegradesWithoutLLM(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	tool := NewVerifyClaimsTool(deps)
+	if _, err := tool.Execute(types.Context{}, types.ArgsMap{"text": "x"}, nil); err != nil {
+		t.Fatalf("expected degraded no-error, got %v", err)
+	}
+}
+
 
 func TestWriteToolCreateAndUpdate(t *testing.T) {
 	deps, st, _ := newTestDeps(t)

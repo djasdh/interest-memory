@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
+	"interest-memory/internal/websearch"
 
 	"my-agent-core/types"
 )
@@ -17,11 +20,20 @@ type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
+// ClaimLLM is the chat surface verify_claims needs (implemented by
+// *llm.Client). Kept narrow for test fakes.
+type ClaimLLM interface {
+	ChatJSON(ctx context.Context, messages []llm.Message, out any) error
+}
+
 // ToolsDeps is everything the wiki tools need beyond the agent loop.
+// Search/LLM are optional: when absent, verify_claims degrades gracefully.
 type ToolsDeps struct {
 	Store    store.Store
 	Vec      vec.VectorIndex
 	Embedder Embedder
+	Search   websearch.Searcher
+	LLM      ClaimLLM
 }
 
 // validEdgeKinds maps the store's five edge kinds.
@@ -453,6 +465,92 @@ func clampConfidence(c float64) float64 {
 }
 
 func asSession(agentID string) string { return agentID }
+
+// verifyResult is the LLM's JSON verdict for one claim audit.
+type verifyResult struct {
+	Status     string   `json:"status"` // supported | contested | unknown
+	Confidence float64  `json:"confidence"`
+	Evidence   []string `json:"evidence"`
+	Reason     string   `json:"reason"`
+}
+
+// NewVerifyClaimsTool returns the verify_claims tool: the agent calls it
+// during writing to fact-check a draft statement against the web. It gathers
+// web evidence (when a Searcher is wired) then asks the LLM for a verdict.
+// Degrades to a JSON unknown verdict rather than erroring.
+func NewVerifyClaimsTool(deps ToolsDeps) types.Tool {
+	return types.Tool{
+		Name:        "verify_claims",
+		Description: "Fact-check a statement against the web before writing it to the wiki. Use this for objective factual claims you are about to persist; returns a JSON verdict (supported/contested/unknown) with evidence. Subjective preferences do not need this.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text": map[string]any{
+					"type":        "string",
+					"description": "The factual statement/claim to verify",
+				},
+			},
+			"required": []string{"text"},
+		},
+		Execute: func(_ types.Context, args types.ArgsMap, _ <-chan struct{}) (string, error) {
+			text, _ := args["text"].(string)
+			if strings.TrimSpace(text) == "" {
+				return "", fmt.Errorf("verify_claims: missing 'text'")
+			}
+			return auditClaims(context.Background(), deps, text)
+		},
+	}
+}
+
+func auditClaims(ctx context.Context, deps ToolsDeps, text string) (string, error) {
+	var evidence []websearch.SearchItem
+	if deps.Search != nil {
+		items, err := deps.Search.Search(ctx, text, 5)
+		if err == nil {
+			evidence = items
+		}
+	}
+	if deps.LLM == nil {
+		// No verdict capability: return a degraded JSON so the agent knows
+		// the statement was not web-verified.
+		return `{"status":"unknown","confidence":0,"evidence":[],"reason":"verify_claims: no LLM configured"}` + "\n", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("Judge whether the following statement is reliable based on web evidence (or general knowledge if none).\n\n")
+	b.WriteString("Statement: " + text + "\n")
+	if len(evidence) > 0 {
+		b.WriteString("\nWeb evidence:\n")
+		for i, e := range evidence {
+			b.WriteString(fmt.Sprintf("%d. %s — %s (%s)\n", i+1, e.Title, truncate(e.Snippet, 200), e.URL))
+		}
+	} else {
+		b.WriteString("\n(No web evidence — rely on the statement wording and general knowledge.)\n")
+	}
+	b.WriteString(`
+Return ONLY valid JSON:
+{
+  "status": "supported" | "contested" | "unknown",
+  "confidence": 0.0-1.0,
+  "evidence": ["short reason 1", "short reason 2"],
+  "reason": "one sentence verdict"
+}`)
+
+	var vr verifyResult
+	if err := deps.LLM.ChatJSON(ctx, []llm.Message{{Role: "user", Content: b.String()}}, &vr); err != nil {
+		return `{"status":"unknown","confidence":0,"evidence":[],"reason":"verify_claims: verdict failed"}` + "\n", nil
+	}
+	switch vr.Status {
+	case "supported", "contested", "unknown":
+	default:
+		vr.Status = "unknown"
+	}
+	if vr.Confidence <= 0 || vr.Confidence > 1 {
+		vr.Confidence = 0
+	}
+	out, _ := json.Marshal(vr)
+	return string(out) + "\n", nil
+}
 
 // claimID derives a stable id for a claim from its page + text.
 func claimID(agentID, pageID, text string) string {
