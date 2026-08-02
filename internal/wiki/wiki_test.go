@@ -186,8 +186,6 @@ func TestReviewToolDegradesWithoutLLM(t *testing.T) {
 	}
 }
 
-
-
 func TestWriteToolCreatesHasPageEdge(t *testing.T) {
 	deps, st, _ := newTestDeps(t)
 	ctx := context.Background()

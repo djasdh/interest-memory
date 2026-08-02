@@ -62,10 +62,10 @@ type RecallService interface {
 // EdgeRef is an adjacency edge projected for the consumer tool: the far-end
 // id + title (page Title or interest point Name), without the far-end body.
 type EdgeRef struct {
-	ID     string          `json:"id"`
-	Title  string          `json:"title"`
-	Kind   store.EdgeType  `json:"kind"`
-	Weight float64         `json:"weight"`
+	ID     string         `json:"id"`
+	Title  string         `json:"title"`
+	Kind   store.EdgeType `json:"kind"`
+	Weight float64        `json:"weight"`
 }
 
 // Result is one structured search hit for the consumer-side memory_search
@@ -321,13 +321,13 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 		return nil, nil
 	}
 	r := &Result{
-		Kind:        "wiki_page",
-		ID:          pg.ID,
-		Title:       pg.Title,
-		BodyMD:      truncate(pg.BodyMD, maxBodyLen),
-		Status:      pg.Status,
-		Claims:      pg.Claims,
-		Freshness:   store.Freshness{Level: "unknown"},
+		Kind:      "wiki_page",
+		ID:        pg.ID,
+		Title:     pg.Title,
+		BodyMD:    truncate(pg.BodyMD, maxBodyLen),
+		Status:    pg.Status,
+		Claims:    pg.Claims,
+		Freshness: store.Freshness{Level: "unknown"},
 	}
 	s.attachEdges(ctx, agentID, h.ID, r)
 	return r, nil

@@ -104,7 +104,9 @@ func TestReconcileBatchesOverTen(t *testing.T) {
 	runner := &fakeRunner{}
 	w := &Writer{deps: deps, runLoop: runner.run}
 	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
-	w.prov = func(context.Context) (*provider.Provider, error) { return provider.NewConfiguredProvider(model, "k"), nil }
+	w.prov = func(context.Context) (*provider.Provider, error) {
+		return provider.NewConfiguredProvider(model, "k"), nil
+	}
 
 	err := w.ReconcileRelated(context.Background(), "a", ReconcileInput{TouchedPages: []string{"page-a"}}, 2, 10)
 	if err != nil {

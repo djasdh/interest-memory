@@ -71,10 +71,10 @@ type Graded struct {
 	Hit        vec.Hit
 	Title      string
 	Confidence float64
-	Status     string // supported | contested | unknown
-	FreshLevel string // fresh | aging | stale | unknown
+	Status     string    // supported | contested | unknown
+	FreshLevel string    // fresh | aging | stale | unknown
 	EventTime  time.Time // 事件发生时间（temporal 注入）
-	Note       string // self-check hint
+	Note       string    // self-check hint
 }
 
 // Config controls the correction layer.
@@ -139,7 +139,7 @@ var _ Verifier = (*service)(nil)
 // fact-check failed — never blocks the pipeline.
 func degradedVerifier(c fork.Candidate) Verified {
 	return Verified{
-		Candidate: c,
+		Candidate:  c,
 		Subjective: c.Subjective,
 		Relation:   RelationNone,
 		Reliability: store.Reliability{
@@ -150,4 +150,3 @@ func degradedVerifier(c fork.Candidate) Verified {
 		Freshness: store.Freshness{Level: "unknown", UpdatedAt: now(), TTLDays: 0},
 	}
 }
-

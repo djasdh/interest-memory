@@ -58,10 +58,10 @@ func TestInterestPointTurnRangePersisted(t *testing.T) {
 
 	p := InterestPoint{
 		ID: "ip-tr", AgentID: "a", Name: "点", Summary: "s",
-		Status:     "active",
-		TurnRange:  [2]int{3, 9},
+		Status:      "active",
+		TurnRange:   [2]int{3, 9},
 		Reliability: Reliability{Confidence: 0.8, Status: "supported"},
-		Freshness:  Freshness{Level: "fresh", UpdatedAt: now},
+		Freshness:   Freshness{Level: "fresh", UpdatedAt: now},
 	}
 	if err := s.UpsertInterestPoint(ctx, p); err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -217,8 +217,8 @@ func TestPageTagsAndSourcesPersisted(t *testing.T) {
 	now := time.Now()
 
 	p := Page{ID: "pg-tag", AgentID: "a", Title: "T", BodyMD: "b", Status: "active",
-		Tags:   []string{"go", "database"},
-		Sources: []string{"https://x.example", "postgresql-page"},
+		Tags:      []string{"go", "database"},
+		Sources:   []string{"https://x.example", "postgresql-page"},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.UpsertPage(ctx, p); err != nil {

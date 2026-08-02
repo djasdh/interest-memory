@@ -67,9 +67,9 @@ type EmbeddingConfig struct {
 }
 
 type ForkConfig struct {
-	PrefixStep       int     `yaml:"prefix_step"`       // 前缀窗口按 user 回合的递增步长
-	MaxWindows       int     `yaml:"max_windows"`       // 前缀窗口上限（超限保留最长的 N 个）
-	MaxConcurrency   int     `yaml:"max_concurrency"`   // 窗口提取并行度
+	PrefixStep       int     `yaml:"prefix_step"`     // 前缀窗口按 user 回合的递增步长
+	MaxWindows       int     `yaml:"max_windows"`     // 前缀窗口上限（超限保留最长的 N 个）
+	MaxConcurrency   int     `yaml:"max_concurrency"` // 窗口提取并行度
 	SimilarityMerge  float64 `yaml:"similarity_merge"`
 	SimilarityRelate float64 `yaml:"similarity_relate"`
 	ImportanceBoost  float64 `yaml:"importance_boost_per_seen"`

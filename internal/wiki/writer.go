@@ -39,9 +39,9 @@ type loopRunner func(ctx context.Context, p *provider.Provider, system string, t
 // review / wiki_write tools to persist knowledge (single-point + evidence +
 // conversation, serial loops).
 type Writer struct {
-	deps   ToolsDeps
-	prov   ProviderFactory
-	system string
+	deps    ToolsDeps
+	prov    ProviderFactory
+	system  string
 	timeout time.Duration
 	runLoop loopRunner
 }

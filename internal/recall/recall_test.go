@@ -223,8 +223,8 @@ func TestSearchReturnsMixedResultsWithEdges(t *testing.T) {
 		ips: map[string]*store.InterestPoint{"ip-1": ip},
 		pgs: map[string]*store.Page{"postgresql-page": pg},
 		outs: map[string][]store.Edge{
-			"ip-1":             {{SourceID: "ip-1", TargetID: "postgresql-page", Kind: store.EdgeHasPage, Weight: 1}},
-			"postgresql-page":  {{SourceID: "postgresql-page", TargetID: "related-page", Kind: store.EdgeRelated, Weight: 0.9}},
+			"ip-1":            {{SourceID: "ip-1", TargetID: "postgresql-page", Kind: store.EdgeHasPage, Weight: 1}},
+			"postgresql-page": {{SourceID: "postgresql-page", TargetID: "related-page", Kind: store.EdgeRelated, Weight: 0.9}},
 		},
 		ins: map[string][]store.Edge{
 			"postgresql-page": {{SourceID: "ip-1", TargetID: "postgresql-page", Kind: store.EdgeHasPage, Weight: 1}},

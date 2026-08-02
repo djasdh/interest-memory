@@ -16,8 +16,8 @@ import (
 type mockLLM struct {
 	mu      sync.Mutex
 	prompt  string
-	cands   []Candidate      // returned when perCall is empty
-	perCall [][]Candidate    // consumed in order, one per ChatJSON call
+	cands   []Candidate   // returned when perCall is empty
+	perCall [][]Candidate // consumed in order, one per ChatJSON call
 	chatErr error
 	callN   int
 }

@@ -165,21 +165,21 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-			"id": map[string]any{
-				"type":        "string",
-				"description": "Unique page identifier (lowercase, hyphen-separated)",
-			},
-			"title":       map[string]any{"type": "string"},
-			"content":     map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
-			"page_type":   map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
-			"status":      map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
-			"event_time":  map[string]any{"type": "string", "description": "事件发生时间（RFC3339，来自兴趣点的会话开始时间）"},
-			"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
-			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "分类法标签（用 wiki_tags 查已有标签，优先复用）"},
-			"sources":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "来源：关键网页 URL 或现有页 id（主观兴趣点可省略）"},
-				"session_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
+				"id": map[string]any{
+					"type":        "string",
+					"description": "Unique page identifier (lowercase, hyphen-separated)",
+				},
+				"title":             map[string]any{"type": "string"},
+				"content":           map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
+				"page_type":         map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
+				"status":            map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
+				"event_time":        map[string]any{"type": "string", "description": "事件发生时间（RFC3339，来自兴趣点的会话开始时间）"},
+				"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
+				"tags":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "分类法标签（用 wiki_tags 查已有标签，优先复用）"},
+				"sources":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "来源：关键网页 URL 或现有页 id（主观兴趣点可省略）"},
+				"session_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
 				"edges": map[string]any{
-					"type":  "array",
+					"type":        "array",
 					"description": "Edges to other pages. Each: {target_id, type} where type is one of: related, contradicts, sequel, references, has_page",
 					"items": map[string]any{
 						"type": "object",

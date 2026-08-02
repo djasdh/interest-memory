@@ -119,12 +119,12 @@ func cands(n int) []fork.Candidate {
 
 func TestVerifyCandidatesSupported(t *testing.T) {
 	f := newSerialFakeLLM([]any{map[string]any{
-		"supported":      true,
-		"confidence":     0.9,
-		"status":         "supported",
-		"evidence":       []string{"matches known facts"},
+		"supported":       true,
+		"confidence":      0.9,
+		"status":          "supported",
+		"evidence":        []string{"matches known facts"},
 		"freshness_level": "fresh",
-		"ttl_days":       90,
+		"ttl_days":        90,
 	}})
 	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "u", Snippet: "s"}}}
 	v := New(f, &fakeStore{}, se, nil, nil, Config{UseWebSearch: true, SearchMax: 5})

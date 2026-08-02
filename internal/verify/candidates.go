@@ -23,8 +23,8 @@ type verifyResult struct {
 	FreshLevel     string   `json:"freshness_level"` // fresh | aging | stale | unknown
 	TTLDays        int      `json:"ttl_days"`
 	SearchQuery    string   `json:"search_query,omitempty"`
-	Relation       string   `json:"relation"`         // none | supersede | update | delete
-	RelationReason string   `json:"relation_reason"`  // why this relation holds
+	Relation       string   `json:"relation"`        // none | supersede | update | delete
+	RelationReason string   `json:"relation_reason"` // why this relation holds
 }
 
 // VerifyCandidates fact-checks each candidate (verify#1), concurrently with
@@ -211,7 +211,7 @@ Relation semantics (only meaningful when a similar historical memory exists):
 - "supersede": the new claim replaces the historical one (the user moved on)
 - "update": the new claim corrects or refines the historical one (merge into it)
 - "delete": the new claim shows the historical one is no longer true (remove it)
-- "none": no meaningful relation to the historical memory`) 
+- "none": no meaningful relation to the historical memory`)
 	return b.String()
 }
 

@@ -9,7 +9,7 @@ import (
 
 // fakeTool records calls and returns canned items.
 type fakeTool struct {
-	name string
+	name  string
 	items []SearchItem
 	err   error
 	calls atomic.Int32

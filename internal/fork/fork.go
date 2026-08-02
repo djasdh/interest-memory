@@ -43,12 +43,12 @@ type ForkAnalyzer interface {
 // concurrently (bounded by maxConcurrency); results are deduplicated across
 // the overlapping prefix windows.
 type Analyzer struct {
-	llm           LLM
-	prefixStep    int
-	maxWindows    int
+	llm            LLM
+	prefixStep     int
+	maxWindows     int
 	maxConcurrency int
-	maxCandidates int
-	minConfidence float64
+	maxCandidates  int
+	minConfidence  float64
 }
 
 // NewAnalyzer builds an Analyzer from fork config.

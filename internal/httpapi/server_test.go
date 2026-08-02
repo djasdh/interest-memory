@@ -17,16 +17,16 @@ import (
 
 // fakeService implements Service for handler tests.
 type fakeService struct {
-	saveErr   error
-	recallOut string
-	pts       []store.InterestPoint
-	pages     []store.Page
-	stats     map[string]int
-	forkTx    *store.Transcript
-	searchRes []recall.Result
-	byIDRes   *recall.Result
-	logs      []store.ChangeLog
-	savedTx   *store.Transcript
+	saveErr    error
+	recallOut  string
+	pts        []store.InterestPoint
+	pages      []store.Page
+	stats      map[string]int
+	forkTx     *store.Transcript
+	searchRes  []recall.Result
+	byIDRes    *recall.Result
+	logs       []store.ChangeLog
+	savedTx    *store.Transcript
 	recallOpts recall.Options
 }
 

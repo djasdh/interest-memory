@@ -45,12 +45,12 @@ var ErrNoJob = errors.New("worker: job not found")
 // channel and a dedicated goroutine, so concurrent EndSession pushes for the
 // same agent cannot interleave (design §五: worker 串行).
 type Worker struct {
-	mu      sync.Mutex
-	queues  map[string]chan jobItem
-	jobs    map[string]*Job
-	closed  bool
-	svc     Processor
-	store   store.Store
+	mu     sync.Mutex
+	queues map[string]chan jobItem
+	jobs   map[string]*Job
+	closed bool
+	svc    Processor
+	store  store.Store
 }
 
 type jobItem struct {

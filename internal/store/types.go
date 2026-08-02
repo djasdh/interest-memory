@@ -48,7 +48,7 @@ type InterestPoint struct {
 	Summary        string      `json:"summary"`
 	Keywords       []string    `json:"keywords"`
 	Importance     float64     `json:"importance"`
-	Status         string      `json:"status"` // active | archived
+	Status         string      `json:"status"`     // active | archived
 	Subjective     bool        `json:"subjective"` // 主观观点/偏好标记（豁免联网核查）
 	TurnRange      [2]int      `json:"turn_range"` // 来源会话全局轮次 [start,end]
 	EventTime      time.Time   `json:"event_time"` // 事件发生时间（会话开始时间，session_date 兜底 received_at）
@@ -76,11 +76,11 @@ type Page struct {
 	AgentID   string    `json:"agent_id"`
 	PageType  PageType  `json:"page_type"`
 	Title     string    `json:"title"`
-	BodyMD    string    `json:"body_md"` // markdown，含 [[wikilink]]
-	Status    string    `json:"status"` // active | superseded | archived（"" 视为 active）
-	Tags      []string  `json:"tags,omitempty"`   // 分类法标签
+	BodyMD    string    `json:"body_md"`           // markdown，含 [[wikilink]]
+	Status    string    `json:"status"`            // active | superseded | archived（"" 视为 active）
+	Tags      []string  `json:"tags,omitempty"`    // 分类法标签
 	Sources   []string  `json:"sources,omitempty"` // 来源：网页 URL 或现有页 id（主观性豁免可空）
-	EventTime time.Time `json:"event_time"` // 事件发生时间（会话开始时间）
+	EventTime time.Time `json:"event_time"`        // 事件发生时间（会话开始时间）
 	Claims    []Claim   `json:"claims"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -129,7 +129,7 @@ type Transcript struct {
 	SessionID   string     `json:"session_id"`
 	AgentID     string     `json:"agent_id"`
 	TurnCount   int        `json:"turn_count"`
-	RawTurns    string     `json:"raw_turns"` // JSON: [{role, content}]
+	RawTurns    string     `json:"raw_turns"`              // JSON: [{role, content}]
 	ReceivedAt  time.Time  `json:"received_at"`            // 服务端接收时间
 	SessionDate *time.Time `json:"session_date,omitempty"` // 透传的会话开始时间（RFC3339，可空）
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`

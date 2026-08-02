@@ -19,7 +19,9 @@ type fakeRecall struct {
 	byID          *recall.Result
 }
 
-func (f *fakeRecall) Recall(context.Context, string, string, recall.Options) (string, error) { return "", nil }
+func (f *fakeRecall) Recall(context.Context, string, string, recall.Options) (string, error) {
+	return "", nil
+}
 func (f *fakeRecall) Search(_ context.Context, _, _ string, topK, maxBodyLen int) ([]recall.Result, error) {
 	return f.searchResults, nil
 }
