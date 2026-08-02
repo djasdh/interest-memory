@@ -26,6 +26,8 @@ type VectorIndex interface {
 type Store interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error)
 	GetPage(ctx context.Context, agentID, id string) (*store.Page, error)
+	Outlinks(ctx context.Context, agentID, sourceID string) ([]store.Edge, error)
+	Backlinks(ctx context.Context, agentID, targetID string) ([]store.Edge, error)
 }
 
 // Grader annotates recall hits (implemented by verify.Verifier).
@@ -43,6 +45,38 @@ type Options struct {
 // RecallService is the domain interface (design §七).
 type RecallService interface {
 	Recall(ctx context.Context, agentID, query string, opts Options) (string, error)
+	// Search returns structured hits (full body/claims/evidence + edges) for
+	// the consumer-side memory_search tool. body is truncated to maxBodyLen.
+	Search(ctx context.Context, agentID, query string, topK, maxBodyLen int) ([]Result, error)
+	// GetByID returns one entity (page or interest point) with full content +
+	// edges, or nil when the id is unknown.
+	GetByID(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error)
+}
+
+// EdgeRef is an adjacency edge projected for the consumer tool: the far-end
+// id + title (page Title or interest point Name), without the far-end body.
+type EdgeRef struct {
+	ID     string          `json:"id"`
+	Title  string          `json:"title"`
+	Kind   store.EdgeType  `json:"kind"`
+	Weight float64         `json:"weight"`
+}
+
+// Result is one structured search hit for the consumer-side memory_search
+// tool: full content plus adjacency edges (with target titles).
+type Result struct {
+	Kind        string            `json:"kind"` // interest_point | wiki_page
+	ID          string            `json:"id"`
+	Title       string            `json:"title"`
+	BodyMD      string            `json:"body_md"` // 页正文或兴趣点摘要（按 max_body_len 截断）
+	Status      string            `json:"status"`
+	Subjective  bool              `json:"subjective,omitempty"`
+	Claims      []store.Claim     `json:"claims,omitempty"`
+	Evidence    []store.Evidence  `json:"evidence,omitempty"`
+	Reliability store.Reliability `json:"reliability"`
+	Freshness   store.Freshness   `json:"freshness"`
+	Outlinks    []EdgeRef         `json:"outlinks"`
+	Backlinks   []EdgeRef         `json:"backlinks"`
 }
 
 type service struct {
@@ -157,6 +191,140 @@ func titleOf(g verify.Graded) string {
 		return g.Title
 	}
 	return g.Hit.ID
+}
+
+// Search returns structured hits (full content + edges) for the
+// consumer-side memory_search tool. Falls back to keyword search when
+// embedding/vector search is unavailable; returns empty on failure.
+func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBodyLen int) ([]Result, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	if topK <= 0 {
+		topK = 3
+	}
+	var hits []vec.Hit
+	if s.embedder != nil && s.vec != nil {
+		q, err := s.embedder.Embed(ctx, query)
+		if err == nil {
+			hits, _ = s.vec.Search(ctx, agentID, q, topK)
+		}
+	}
+	if len(hits) == 0 && s.vec != nil {
+		kw, kerr := s.vec.SearchByKeywords(ctx, agentID, query, topK)
+		if kerr == nil && len(kw) > 0 {
+			hits = kw
+		}
+	}
+	if len(hits) > topK {
+		hits = hits[:topK]
+	}
+	var out []Result
+	for _, h := range hits {
+		r, err := s.resultFor(ctx, agentID, h, maxBodyLen)
+		if err != nil {
+			return nil, err
+		}
+		if r != nil {
+			out = append(out, *r)
+		}
+	}
+	return out, nil
+}
+
+// GetByID returns one entity with full content + edges, or nil when unknown.
+func (s *service) GetByID(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, nil
+	}
+	if p, err := s.store.GetInterestPoint(ctx, agentID, id); err == nil && p != nil {
+		return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "interest_point"}, maxBodyLen)
+	}
+	pg, err := s.store.GetPage(ctx, agentID, id)
+	if err != nil || pg == nil {
+		return nil, nil
+	}
+	return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "wiki_page"}, maxBodyLen)
+}
+
+// resultFor assembles one Result for a hit, attaching edges with far-end
+// titles. Archived/superseded entities are filtered out.
+func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxBodyLen int) (*Result, error) {
+	if h.Kind == "interest_point" {
+		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
+		if err != nil || p == nil {
+			return nil, nil
+		}
+		if p.Status == "archived" {
+			return nil, nil
+		}
+		r := &Result{
+			Kind:        "interest_point",
+			ID:          p.ID,
+			Title:       p.Name,
+			BodyMD:      truncate(p.Summary, maxBodyLen),
+			Status:      p.Status,
+			Subjective:  p.Subjective,
+			Evidence:    p.Reliability.Evidence,
+			Reliability: p.Reliability,
+			Freshness:   p.Freshness,
+		}
+		s.attachEdges(ctx, agentID, h.ID, r)
+		return r, nil
+	}
+	pg, err := s.store.GetPage(ctx, agentID, h.ID)
+	if err != nil || pg == nil {
+		return nil, nil
+	}
+	if pg.Status != "" && pg.Status != "active" {
+		return nil, nil
+	}
+	r := &Result{
+		Kind:        "wiki_page",
+		ID:          pg.ID,
+		Title:       pg.Title,
+		BodyMD:      truncate(pg.BodyMD, maxBodyLen),
+		Status:      pg.Status,
+		Claims:      pg.Claims,
+		Freshness:   store.Freshness{Level: "unknown"},
+	}
+	s.attachEdges(ctx, agentID, h.ID, r)
+	return r, nil
+}
+
+// attachEdges fills Outlinks/Backlinks, resolving the far-end title (page
+// Title or interest point Name) for each edge.
+func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result) {
+	if outs, err := s.store.Outlinks(ctx, agentID, id); err == nil {
+		for _, e := range outs {
+			r.Outlinks = append(r.Outlinks, s.edgeRef(ctx, agentID, e, e.TargetID))
+		}
+	}
+	if ins, err := s.store.Backlinks(ctx, agentID, id); err == nil {
+		for _, e := range ins {
+			r.Backlinks = append(r.Backlinks, s.edgeRef(ctx, agentID, e, e.SourceID))
+		}
+	}
+}
+
+// edgeRef resolves the far-end id's title for an edge.
+func (s *service) edgeRef(ctx context.Context, agentID string, e store.Edge, farID string) EdgeRef {
+	ref := EdgeRef{ID: farID, Kind: e.Kind, Weight: e.Weight}
+	if p, err := s.store.GetInterestPoint(ctx, agentID, farID); err == nil && p != nil {
+		ref.Title = p.Name
+		return ref
+	}
+	if pg, err := s.store.GetPage(ctx, agentID, farID); err == nil && pg != nil {
+		ref.Title = pg.Title
+	}
+	return ref
+}
+
+func truncate(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 var _ RecallService = (*service)(nil)
