@@ -14,6 +14,11 @@ __pycache__/
 .env
 .env.*
 
+# design docs & implementation plans (local, not versioned)
+兴趣点记忆系统设计方案.md
+函数级调用图.md
+docs/superpowers/plans/
+
 # local build artifacts
 bin/
 dist/
