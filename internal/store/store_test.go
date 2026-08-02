@@ -211,6 +211,28 @@ func idsOfLogs(logs []ChangeLog) []string {
 	return out
 }
 
+func TestPageTagsAndSourcesPersisted(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	p := Page{ID: "pg-tag", AgentID: "a", Title: "T", BodyMD: "b", Status: "active",
+		Tags:   []string{"go", "database"},
+		Sources: []string{"https://x.example", "postgresql-page"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.UpsertPage(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetPage(ctx, "a", "pg-tag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || len(got.Tags) != 2 || got.Tags[0] != "go" || len(got.Sources) != 2 || got.Sources[1] != "postgresql-page" {
+		t.Errorf("tags/sources = %+v / %+v", got.Tags, got.Sources)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

@@ -77,9 +77,17 @@ type Page struct {
 	Title     string    `json:"title"`
 	BodyMD    string    `json:"body_md"` // markdown，含 [[wikilink]]
 	Status    string    `json:"status"` // active | superseded | archived（"" 视为 active）
+	Tags      []string  `json:"tags,omitempty"`   // 分类法标签
+	Sources   []string  `json:"sources,omitempty"` // 来源：网页 URL 或现有页 id（主观性豁免可空）
 	Claims    []Claim   `json:"claims"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TagCount is one aggregated tag with its usage count.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
 }
 
 // Claim is a structured belief with evidence (纠错层核心）。

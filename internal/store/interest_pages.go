@@ -155,15 +155,17 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 		status = "active"
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO wiki_pages (id, agent_id, page_type, title, body_md, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO wiki_pages (id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, agent_id) DO UPDATE SET
 			page_type = excluded.page_type,
 			title = excluded.title,
 			body_md = excluded.body_md,
 			status = excluded.status,
+			tags = excluded.tags,
+			sources = excluded.sources,
 			updated_at = excluded.updated_at`,
-		p.ID, p.AgentID, string(p.PageType), p.Title, p.BodyMD, status, p.CreatedAt, p.UpdatedAt)
+		p.ID, p.AgentID, string(p.PageType), p.Title, p.BodyMD, status, marshalJSON(p.Tags), marshalJSON(p.Sources), p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("store: upsert page: %w", err)
 	}
@@ -172,16 +174,19 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 
 func (s *SQLiteStore) GetPage(ctx context.Context, agentID, id string) (*Page, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, agent_id, page_type, title, body_md, status, created_at, updated_at
+		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
 		FROM wiki_pages WHERE id = ? AND agent_id = ?`, id, agentID)
 	var p Page
-	err := row.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &p.CreatedAt, &p.UpdatedAt)
+	var tags, sources string
+	err := row.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: get page: %w", err)
 	}
+	unmarshalJSON(tags, &p.Tags)
+	unmarshalJSON(sources, &p.Sources)
 	claims, _ := s.ListClaims(ctx, agentID, p.ID)
 	p.Claims = claims
 	return &p, nil
@@ -192,11 +197,11 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 	var err error
 	if pageType == "" {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, agent_id, page_type, title, body_md, status, created_at, updated_at
+			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
 			FROM wiki_pages WHERE agent_id = ?`, agentID)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, agent_id, page_type, title, body_md, status, created_at, updated_at
+			SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
 			FROM wiki_pages WHERE agent_id = ? AND page_type = ?`, agentID, string(pageType))
 	}
 	if err != nil {
@@ -206,9 +211,12 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 	var out []Page
 	for rows.Next() {
 		var p Page
-		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var tags, sources string
+		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
+		unmarshalJSON(tags, &p.Tags)
+		unmarshalJSON(sources, &p.Sources)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -220,7 +228,7 @@ func (s *SQLiteStore) SearchPagesByKeywords(ctx context.Context, agentID, query 
 	}
 	pattern := "%" + strings.ToLower(query) + "%"
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, agent_id, page_type, title, body_md, status, created_at, updated_at
+		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, created_at, updated_at
 		FROM wiki_pages
 		WHERE agent_id = ? AND (lower(title) LIKE ? OR lower(body_md) LIKE ?)
 		ORDER BY updated_at DESC LIMIT ?`, agentID, pattern, pattern, limit)
@@ -231,9 +239,12 @@ func (s *SQLiteStore) SearchPagesByKeywords(ctx context.Context, agentID, query 
 	var out []Page
 	for rows.Next() {
 		var p Page
-		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var tags, sources string
+		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
+		unmarshalJSON(tags, &p.Tags)
+		unmarshalJSON(sources, &p.Sources)
 		out = append(out, p)
 	}
 	return out, rows.Err()

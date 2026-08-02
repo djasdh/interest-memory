@@ -113,6 +113,8 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			title TEXT NOT NULL,
 			body_md TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'active',
+			tags TEXT NOT NULL DEFAULT '[]',
+			sources TEXT NOT NULL DEFAULT '[]',
 			created_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
 			PRIMARY KEY (id, agent_id)
@@ -184,6 +186,8 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN turn_range_start INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN turn_range_end INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'`)
 	return nil
 }
 
