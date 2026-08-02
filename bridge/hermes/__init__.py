@@ -21,10 +21,12 @@ subclasses automatically (see plugins/memory/__init__.py).
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
 import threading
+import time as _time
 from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
@@ -48,6 +50,7 @@ class InterestMemoryProvider(MemoryProvider):
         self._turns: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._skip_writes = False
+        self._session_started_at = 0.0
 
     # -- Core lifecycle -----------------------------------------------------
 
@@ -79,9 +82,25 @@ class InterestMemoryProvider(MemoryProvider):
             self._skip_writes = True
 
         self._session_id = session_id
+        self._session_started_at = _time.time()
         with self._lock:
             self._turns = []
             self._turn_count = 0
+
+    def on_session_switch(self, new_session_id: str, **kwargs) -> None:
+        """Reset the session-start timestamp when Hermes rotates session ids
+        (/new, /resume, compression continuation) so session_date reflects the
+        actual start of the new logical session."""
+        self._session_id = new_session_id
+        self._session_started_at = _time.time()
+        with self._lock:
+            self._turns = []
+            self._turn_count = 0
+
+    def _session_date_rfc3339(self) -> str:
+        """RFC3339 UTC string of the session start time (fallback: now)."""
+        ts = self._session_started_at or _time.time()
+        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).isoformat()
 
     def system_prompt_block(self) -> str:
         return ""
@@ -163,6 +182,7 @@ class InterestMemoryProvider(MemoryProvider):
                     "session_id": self._session_id,
                     "turn_count": len(turns),
                     "raw_turns": json.dumps(turns, ensure_ascii=False),
+                    "session_date": self._session_date_rfc3339(),
                 },
                 timeout=_SESSION_END_TIMEOUT,
             )

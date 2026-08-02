@@ -12,6 +12,8 @@ import importlib
 import json
 import os
 import sys
+import time
+import datetime
 import types
 import unittest
 from unittest import mock
@@ -177,6 +179,33 @@ class ProviderTest(unittest.TestCase):
             post.return_value = resp
             self.p.shutdown()
         self.assertTrue(post.called)
+
+    # -- session_date passthrough -------------------------------------------
+
+    def test_initialize_records_session_start(self):
+        self.p.initialize("s1")
+        self.assertGreater(self.p._session_started_at, 0)
+
+    def test_on_session_switch_resets_session_start(self):
+        self.p.initialize("s1")
+        t0 = self.p._session_started_at
+        time.sleep(0.01)
+        self.p.on_session_switch("s2")
+        self.assertGreater(self.p._session_started_at, t0)
+
+    def test_on_session_end_posts_session_date(self):
+        self.p.initialize("s1")
+        self.p.sync_turn("u1", "a1")
+        with mock.patch("requests.post") as post:
+            resp = mock.MagicMock()
+            resp.status_code = 202
+            post.return_value = resp
+            self.p.on_session_end([])
+        payload = post.call_args[1]["json"]
+        sd = payload.get("session_date")
+        self.assertTrue(sd, "session_date missing from payload")
+        dt = datetime.datetime.fromisoformat(sd.replace("Z", "+00:00"))
+        self.assertIsNotNone(dt.tzinfo)
 
     # -- memory_search tool --------------------------------------------------
 
