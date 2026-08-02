@@ -68,6 +68,9 @@ verify:
   search_max: 5
   web_tool: myagent
   max_concurrency: 4
+wiki:
+  max_hops: 3
+  batch_size: 10
 recall:
   top_k: 8
   include_wiki: true
