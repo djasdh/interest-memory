@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
@@ -172,6 +173,7 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 			"content":     map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
 			"page_type":   map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
 			"status":      map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
+			"event_time":  map[string]any{"type": "string", "description": "事件发生时间（RFC3339，来自兴趣点的会话开始时间）"},
 			"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
 			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "分类法标签（用 wiki_tags 查已有标签，优先复用）"},
 			"sources":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "来源：关键网页 URL 或现有页 id（主观兴趣点可省略）"},
@@ -235,6 +237,12 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		status = "active"
 	}
 	interestPointID := normalizeID(asString(args["interest_point_id"]))
+	var eventTime time.Time
+	if s := asString(args["event_time"]); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			eventTime = t.UTC()
+		}
+	}
 
 	tags := stringList(args["tags"])
 	if len(tags) > 10 {
@@ -284,6 +292,7 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		Status:    status,
 		Tags:      tags,
 		Sources:   sources,
+		EventTime: eventTime,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

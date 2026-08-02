@@ -108,11 +108,12 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 		dialog := dialogSegment(msgs, ip.TurnRange)
 		prompt := buildPointPrompt(ip, dialog, related)
 
+		var pointTouched []string
 		loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
 		err := w.runLoop(loopCtx, p, w.system, tools, types.Message{Role: types.RoleUser, Text: prompt}, func(ev types.Event) {
 			if ev.Type == "tool_execution_end" && ev.ToolName == "wiki_write" {
 				if id, ok := ev.Args["id"].(string); ok && id != "" {
-					touched = append(touched, id)
+					pointTouched = append(pointTouched, id)
 				}
 			}
 		})
@@ -120,8 +121,26 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 		if err != nil {
 			return touched, fmt.Errorf("wiki: point %q: %w", ip.Name, err)
 		}
+		// Backfill EventTime on pages the agent wrote without event_time.
+		if !ip.EventTime.IsZero() {
+			w.backfillEventTime(ctx, agentID, pointTouched, ip.EventTime)
+		}
+		touched = append(touched, pointTouched...)
 	}
 	return touched, nil
+}
+
+// backfillEventTime stamps pages whose EventTime the agent omitted, using the
+// interest point's event time (writer-level safety net).
+func (w *Writer) backfillEventTime(ctx context.Context, agentID string, ids []string, et time.Time) {
+	for _, id := range ids {
+		p, err := w.deps.Store.GetPage(ctx, agentID, id)
+		if err != nil || p == nil || !p.EventTime.IsZero() {
+			continue
+		}
+		p.EventTime = et
+		_ = w.deps.Store.UpsertPage(ctx, *p)
+	}
 }
 
 // buildPointPrompt renders one interest point's write prompt: the point
@@ -142,6 +161,9 @@ func buildPointPrompt(ip store.InterestPoint, dialog, related string) string {
 		b.WriteString("- 主观性: 是（用户个人偏好/观点）——无需联网核查事实\n")
 	} else {
 		b.WriteString("- 主观性: 否（客观事实声明）——写入前用 verify_claims 联网核查\n")
+	}
+	if !ip.EventTime.IsZero() {
+		b.WriteString(fmt.Sprintf("- 事件时间: %s（wiki_write 的 event_time 参数填这个）\n", ip.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")))
 	}
 	if ip.Reliability.Status != "" {
 		b.WriteString(fmt.Sprintf("- 可信度: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))

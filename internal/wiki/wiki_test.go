@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
@@ -411,6 +412,25 @@ func TestReviewToolInjectsTagsSourcesAndLinkCount(t *testing.T) {
 		if !strings.Contains(l.lastPrompt, want) {
 			t.Errorf("prompt missing %q\n---\n%s", want, l.lastPrompt)
 		}
+	}
+}
+
+func TestWriteToolEventTimeParam(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id": "pg-et", "title": "ET", "content": "x", "event_time": "2026-08-01T10:00:00Z",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pg, _ := st.GetPage(ctx, "agent-a", "pg-et")
+	if pg == nil {
+		t.Fatal("page missing")
+	}
+	want := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	if !pg.EventTime.Equal(want) {
+		t.Errorf("event_time = %v, want %v", pg.EventTime, want)
 	}
 }
 

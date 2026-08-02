@@ -93,6 +93,45 @@ func TestCompileRunsPerPointLoop(t *testing.T) {
 	}
 }
 
+func TestBuildPointPromptIncludesEventTime(t *testing.T) {
+	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	ip := pt("ip-1", "PostgreSQL", "默认数据库", [2]int{0, 2}, nil)
+	ip.EventTime = et
+	prompt := buildPointPrompt(ip, "", "")
+	if !strings.Contains(prompt, "2026-08-01") {
+		t.Errorf("prompt missing event time\n---\n%s", prompt)
+	}
+}
+
+func TestCompileBackfillsEventTime(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	// Seed an existing page (update case) without EventTime.
+	if err := st.UpsertPage(ctx, store.Page{ID: "page-1", AgentID: "agent-a", Title: "P1", BodyMD: "old", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{ids: []string{"page-1"}}
+	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
+	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
+		return provider.NewConfiguredProvider(model, "test"), nil
+	})
+	w.runLoop = runner.run
+
+	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	ip := pt("ip-1", "主题", "摘要", [2]int{0, 0}, nil)
+	ip.EventTime = et
+	if _, err := w.Compile(ctx, "agent-a", []store.InterestPoint{ip}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pg, err := st.GetPage(ctx, "agent-a", "page-1")
+	if err != nil || pg == nil {
+		t.Fatalf("page missing: %v", err)
+	}
+	if !pg.EventTime.Equal(et) {
+		t.Errorf("page event_time = %v, want backfilled %v", pg.EventTime, et)
+	}
+}
+
 func TestCompileDialogsSliceByTurnRange(t *testing.T) {
 	msgs := []types.Message{
 		{Role: types.RoleUser, Text: "u1"},
