@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"interest-memory/internal/vec"
 )
@@ -20,7 +21,7 @@ func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec
 			FreshLevel: "unknown",
 			Note:       "may be outdated or inaccurate — please verify on your own",
 		}
-		title, conf, status, fresh, skip := s.loadEntity(ctx, agentID, h)
+		title, conf, status, fresh, evt, skip := s.loadEntity(ctx, agentID, h)
 		if skip {
 			continue
 		}
@@ -28,6 +29,7 @@ func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec
 		g.Confidence = conf
 		g.Status = status
 		g.FreshLevel = fresh
+		g.EventTime = evt
 		out = append(out, g)
 	}
 	return out, nil
@@ -35,28 +37,28 @@ func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec
 
 // loadEntity resolves an interest point or wiki page hit into gradable data.
 // skip=true means the entity should not be recalled (e.g. archived).
-func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (title string, conf float64, status, fresh string, skip bool) {
+func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (title string, conf float64, status, fresh string, evt time.Time, skip bool) {
 	if h.Kind == "interest_point" {
 		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
 		if err != nil || p == nil {
-			return title, 0, "unknown", "unknown", false
+			return title, 0, "unknown", "unknown", time.Time{}, false
 		}
 		if p.Status == "archived" {
-			return "", 0, "", "", true
+			return "", 0, "", "", time.Time{}, true
 		}
-		return p.Name, p.Reliability.Confidence, p.Reliability.Status, p.Freshness.Level, false
+		return p.Name, p.Reliability.Confidence, p.Reliability.Status, p.Freshness.Level, p.EventTime, false
 	}
 	pg, err := s.store.GetPage(ctx, agentID, h.ID)
 	if err != nil || pg == nil {
-		return title, 0, "unknown", "unknown", false
+		return title, 0, "unknown", "unknown", time.Time{}, false
 	}
 	// Non-active pages (superseded/archived) are not recalled.
 	if pg.Status != "" && pg.Status != "active" {
-		return "", 0, "", "", true
+		return "", 0, "", "", time.Time{}, true
 	}
 	// Page-level grading: derive from the strongest claim, if any.
 	if len(pg.Claims) == 0 {
-		return pg.Title, 0, "unknown", "unknown", false
+		return pg.Title, 0, "unknown", "unknown", pg.EventTime, false
 	}
 	best := pg.Claims[0]
 	for _, c := range pg.Claims {
@@ -64,7 +66,7 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 			best = c
 		}
 	}
-	return pg.Title, best.Confidence, best.Status, best.Freshness.Level, false
+	return pg.Title, best.Confidence, best.Status, best.Freshness.Level, pg.EventTime, false
 }
 
 // FeedbackWrite closes the loop: for each recalled interest-point hit, bump

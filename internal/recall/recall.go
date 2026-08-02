@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
@@ -40,6 +41,11 @@ type Options struct {
 	TopK        int
 	IncludeWiki bool
 	MinScore    float64
+	// After/Before are RFC3339 event-time filters (EventTime must fall in
+	// range). RecentDays filters to the last N days (After = now - N*24h).
+	After      *time.Time
+	Before     *time.Time
+	RecentDays int
 }
 
 // RecallService is the domain interface (design §七).
@@ -131,7 +137,17 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 		return nil, nil
 	}
 
-	// Apply min-score threshold and (optionally) drop wiki pages.
+	// Event-time window from options.
+	after, before := opts.After, opts.Before
+	if opts.RecentDays > 0 {
+		t := time.Now().UTC().AddDate(0, 0, -opts.RecentDays)
+		if after == nil || t.After(*after) {
+			after = &t
+		}
+	}
+
+	// Apply min-score threshold, (optionally) drop wiki pages, and filter by
+	// event time.
 	filtered := hits[:0]
 	for _, h := range hits {
 		if opts.MinScore > 0 && h.Score < float32(opts.MinScore) {
@@ -140,12 +156,34 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 		if !opts.IncludeWiki && h.Kind == "wiki_page" {
 			continue
 		}
+		if after != nil || before != nil {
+			et := s.eventTimeOf(ctx, agentID, h)
+			if after != nil && (et.IsZero() || et.Before(*after)) {
+				continue
+			}
+			if before != nil && (et.IsZero() || et.After(*before)) {
+				continue
+			}
+		}
 		filtered = append(filtered, h)
 	}
 	if len(filtered) > opts.TopK {
 		filtered = filtered[:opts.TopK]
 	}
 	return filtered, nil
+}
+
+// eventTimeOf resolves an entity's EventTime for temporal filtering.
+func (s *service) eventTimeOf(ctx context.Context, agentID string, h vec.Hit) time.Time {
+	if h.Kind == "interest_point" {
+		if p, err := s.store.GetInterestPoint(ctx, agentID, h.ID); err == nil && p != nil {
+			return p.EventTime
+		}
+	}
+	if pg, err := s.store.GetPage(ctx, agentID, h.ID); err == nil && pg != nil {
+		return pg.EventTime
+	}
+	return time.Time{}
 }
 
 func (s *service) vecSearch(ctx context.Context, agentID, query string, topK int) ([]vec.Hit, error) {
@@ -173,6 +211,9 @@ func assemble(graded []verify.Graded) string {
 func renderOne(g verify.Graded) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("- %s [%s]", titleOf(g), g.Hit.Kind))
+	if !g.EventTime.IsZero() {
+		b.WriteString(fmt.Sprintf(" (at %s)", g.EventTime.UTC().Format("2006-01-02")))
+	}
 	if g.Confidence > 0 {
 		b.WriteString(fmt.Sprintf(" (confidence %.2f, %s)", g.Confidence, g.Status))
 	}

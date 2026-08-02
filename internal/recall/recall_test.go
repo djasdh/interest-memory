@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
@@ -53,9 +54,9 @@ func (f *fakeStore) Backlinks(_ context.Context, _, id string) ([]store.Edge, er
 	return f.ins[id], nil
 }
 
-type fakeGrader struct{}
+type fakeGrader struct{ evt time.Time }
 
-func (fakeGrader) GradeForRecall(_ context.Context, _ string, hits []vec.Hit) ([]verify.Graded, error) {
+func (f *fakeGrader) GradeForRecall(_ context.Context, _ string, hits []vec.Hit) ([]verify.Graded, error) {
 	out := make([]verify.Graded, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, verify.Graded{
@@ -64,6 +65,7 @@ func (fakeGrader) GradeForRecall(_ context.Context, _ string, hits []vec.Hit) ([
 			Confidence: 0.8,
 			Status:     "supported",
 			FreshLevel: "fresh",
+			EventTime:  f.evt,
 			Note:       "may be outdated or inaccurate — please verify on your own",
 		})
 	}
@@ -75,7 +77,7 @@ func TestRecallAssemblesMemoryContext(t *testing.T) {
 		{ID: "ip1", AgentID: "a", Kind: "interest_point", Score: 0.9},
 		{ID: "pg1", AgentID: "a", Kind: "wiki_page", Score: 0.7},
 	}}
-	s := New(fakeEmbedder{}, fv, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, fv, &fakeStore{}, &fakeGrader{})
 	out, err := s.Recall(context.Background(), "agent-a", "go concurrency", Options{TopK: 8, IncludeWiki: true, MinScore: 0.3})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +98,7 @@ func TestRecallExcludesWikiWhenDisabled(t *testing.T) {
 		{ID: "ip1", Kind: "interest_point", Score: 0.9},
 		{ID: "pg1", Kind: "wiki_page", Score: 0.9},
 	}}
-	s := New(fakeEmbedder{}, fv, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, fv, &fakeStore{}, &fakeGrader{})
 	out, err := s.Recall(context.Background(), "agent-a", "q", Options{TopK: 8, IncludeWiki: false})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +116,7 @@ func TestRecallFiltersByMinScore(t *testing.T) {
 		{ID: "ip1", Kind: "interest_point", Score: 0.9},
 		{ID: "ip2", Kind: "interest_point", Score: 0.1},
 	}}
-	s := New(fakeEmbedder{}, fv, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, fv, &fakeStore{}, &fakeGrader{})
 	out, err := s.Recall(context.Background(), "agent-a", "q", Options{TopK: 8, IncludeWiki: true, MinScore: 0.5})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +130,7 @@ func TestRecallFiltersByMinScore(t *testing.T) {
 }
 
 func TestRecallEmptyQuery(t *testing.T) {
-	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, &fakeGrader{})
 	out, err := s.Recall(context.Background(), "agent-a", "  ", Options{TopK: 8})
 	if err != nil {
 		t.Fatal(err)
@@ -138,8 +140,63 @@ func TestRecallEmptyQuery(t *testing.T) {
 	}
 }
 
+func TestRecallFiltersByAfter(t *testing.T) {
+	now := time.Now().UTC()
+	after := now.Add(-24 * time.Hour)
+	old := &store.InterestPoint{ID: "ip-old", AgentID: "a", Name: "old", EventTime: now.Add(-48 * time.Hour)}
+	newIP := &store.InterestPoint{ID: "ip-new", AgentID: "a", Name: "new", EventTime: now.Add(-1 * time.Hour)}
+	st := &fakeStore{
+		ips: map[string]*store.InterestPoint{"ip-old": old, "ip-new": newIP},
+	}
+	fv := &fakeVec{hits: []vec.Hit{
+		{ID: "ip-old", Kind: "interest_point", Score: 0.9},
+		{ID: "ip-new", Kind: "interest_point", Score: 0.8},
+	}}
+	s := New(fakeEmbedder{}, fv, st, &fakeGrader{})
+	out, err := s.Recall(context.Background(), "a", "q", Options{TopK: 8, After: &after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "ip-old") || !strings.Contains(out, "ip-new") {
+		t.Errorf("after-filter output = %q", out)
+	}
+}
+
+func TestRecallFiltersByRecentDays(t *testing.T) {
+	old := &store.InterestPoint{ID: "ip-old", AgentID: "a", Name: "old", EventTime: time.Now().Add(-10 * 24 * time.Hour)}
+	newIP := &store.InterestPoint{ID: "ip-new", AgentID: "a", Name: "new", EventTime: time.Now().Add(-1 * time.Hour)}
+	st := &fakeStore{ips: map[string]*store.InterestPoint{"ip-old": old, "ip-new": newIP}}
+	fv := &fakeVec{hits: []vec.Hit{
+		{ID: "ip-old", Kind: "interest_point", Score: 0.9},
+		{ID: "ip-new", Kind: "interest_point", Score: 0.8},
+	}}
+	s := New(fakeEmbedder{}, fv, st, &fakeGrader{})
+	out, err := s.Recall(context.Background(), "a", "q", Options{TopK: 8, RecentDays: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "ip-old") || !strings.Contains(out, "ip-new") {
+		t.Errorf("recent-days output = %q", out)
+	}
+}
+
+func TestRecallRendersEventTime(t *testing.T) {
+	evt := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	ip := &store.InterestPoint{ID: "ip-1", AgentID: "a", Name: "Alpha", EventTime: evt}
+	st := &fakeStore{ips: map[string]*store.InterestPoint{"ip-1": ip}}
+	fv := &fakeVec{hits: []vec.Hit{{ID: "ip-1", Kind: "interest_point", Score: 0.9}}}
+	s := New(fakeEmbedder{}, fv, st, &fakeGrader{evt: evt})
+	out, err := s.Recall(context.Background(), "a", "q", Options{TopK: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "(at 2026-08-01)") {
+		t.Errorf("output missing event timestamp: %q", out)
+	}
+}
+
 func TestRecallEmptyHits(t *testing.T) {
-	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, &fakeGrader{})
 	out, err := s.Recall(context.Background(), "agent-a", "nothing matches", Options{TopK: 8})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +236,7 @@ func TestSearchReturnsMixedResultsWithEdges(t *testing.T) {
 		{ID: "ip-1", Kind: "interest_point", Score: 0.9},
 		{ID: "postgresql-page", Kind: "wiki_page", Score: 0.85},
 	}}
-	s := New(fakeEmbedder{}, fv, st, fakeGrader{})
+	s := New(fakeEmbedder{}, fv, st, &fakeGrader{})
 	results, err := s.Search(context.Background(), "a", "PostgreSQL", 5, 4000)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -227,7 +284,7 @@ func TestSearchTruncatesBody(t *testing.T) {
 		outs: map[string][]store.Edge{},
 		ins:  map[string][]store.Edge{},
 	}
-	s := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{{ID: "pg", Kind: "wiki_page", Score: 0.9}}}, st, fakeGrader{})
+	s := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{{ID: "pg", Kind: "wiki_page", Score: 0.9}}}, st, &fakeGrader{})
 	results, err := s.Search(context.Background(), "a", "q", 5, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +295,7 @@ func TestSearchTruncatesBody(t *testing.T) {
 }
 
 func TestSearchNoHits(t *testing.T) {
-	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, fakeGrader{})
+	s := New(fakeEmbedder{}, &fakeVec{}, &fakeStore{}, &fakeGrader{})
 	results, err := s.Search(context.Background(), "a", "nothing", 5, 4000)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +313,7 @@ func TestGetByIDResolvesPageAndInterestPoint(t *testing.T) {
 		outs: map[string][]store.Edge{},
 		ins:  map[string][]store.Edge{},
 	}
-	s := New(fakeEmbedder{}, &fakeVec{}, st, fakeGrader{})
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
 	r, err := s.GetByID(context.Background(), "a", "ip-1", 4000)
 	if err != nil {
 		t.Fatal(err)

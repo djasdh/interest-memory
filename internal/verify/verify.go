@@ -73,6 +73,7 @@ type Graded struct {
 	Confidence float64
 	Status     string // supported | contested | unknown
 	FreshLevel string // fresh | aging | stale | unknown
+	EventTime  time.Time // 事件发生时间（temporal 注入）
 	Note       string // self-check hint
 }
 
