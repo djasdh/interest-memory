@@ -35,6 +35,7 @@ type fakeStore struct {
 	ip     map[string]*store.InterestPoint
 	edges  []store.Edge
 	upsert *store.InterestPoint
+	logs   []store.ChangeLog
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{ip: map[string]*store.InterestPoint{}} }
@@ -54,12 +55,76 @@ func (f *fakeStore) AddEdgePair(_ context.Context, _ string, e store.Edge) error
 	f.edges = append(f.edges, e)
 	return nil
 }
+func (f *fakeStore) AppendLog(_ context.Context, l store.ChangeLog) error {
+	f.logs = append(f.logs, l)
+	return nil
+}
 
 func vv(topic string, conf float64) verify.Verified {
 	return verify.Verified{
 		Candidate:   fork.Candidate{Topic: topic, Reason: "reason for " + topic, Confidence: conf, Tags: []string{"t1"}},
 		Reliability: store.Reliability{Confidence: conf, Status: "supported"},
 		Freshness:   store.Freshness{Level: "fresh"},
+	}
+}
+
+func TestInterestLogsOnChanges(t *testing.T) {
+	old := &store.InterestPoint{ID: "old1", AgentID: "a", Name: "旧观点", Status: "active"}
+	st := newFakeStore()
+	st.ip["old1"] = old
+	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
+
+	// create
+	if _, _, err := c.Clean(context.Background(), "a", []verify.Verified{vv("新主题", 0.9)}); err != nil {
+		t.Fatal(err)
+	}
+	// update (merge into existing via high similarity)
+	st.ip["merge-target"] = &store.InterestPoint{ID: "merge-target", AgentID: "a", Name: "旧主题", Status: "active"}
+	c2 := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{{ID: "merge-target", Kind: "interest_point", Score: 0.95}}}, st, config.ForkConfig{})
+	if _, _, err := c2.Clean(context.Background(), "a", []verify.Verified{vv("旧主题更新", 0.9)}); err != nil {
+		t.Fatal(err)
+	}
+	// archive (delete relation)
+	if _, _, err := c2.Clean(context.Background(), "a", []verify.Verified{vvRel("新观点", verify.RelationDelete, "old1", "")}); err != nil {
+		t.Fatal(err)
+	}
+
+	actions := map[string]string{}
+	for _, l := range st.logs {
+		actions[l.Action+"|"+l.EntityID] = l.Title
+	}
+	if actions["create|"+newID("新主题")] != "新主题" {
+		t.Errorf("missing create log; logs = %+v", st.logs)
+	}
+	if actions["update|merge-target"] != "旧主题" {
+		t.Errorf("missing update log; logs = %+v", st.logs)
+	}
+	if actions["archive|old1"] != "旧观点" {
+		t.Errorf("missing archive log; logs = %+v", st.logs)
+	}
+}
+
+func TestInterestLogsSupersedeWithSequelEdge(t *testing.T) {
+	old := &store.InterestPoint{ID: "old1", AgentID: "a", Name: "旧观点", Status: "active"}
+	st := newFakeStore()
+	st.ip["old1"] = old
+	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
+	if _, _, err := c.Clean(context.Background(), "a", []verify.Verified{
+		vvRel("新观点", verify.RelationSupersede, "old1", ""),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var supersede *store.ChangeLog
+	for i := range st.logs {
+		if st.logs[i].Action == "supersede" {
+			supersede = &st.logs[i]
+		}
+	}
+	if supersede == nil {
+		t.Fatalf("no supersede log; logs = %+v", st.logs)
+	}
+	if len(supersede.Edges) != 1 || supersede.Edges[0].Kind != store.EdgeSequel || supersede.Edges[0].SourceID != "old1" {
+		t.Errorf("supersede edges = %+v", supersede.Edges)
 	}
 }
 

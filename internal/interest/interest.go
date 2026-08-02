@@ -31,6 +31,7 @@ type Store interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error)
 	UpsertInterestPoint(ctx context.Context, p store.InterestPoint) error
 	AddEdgePair(ctx context.Context, agentID string, e store.Edge) error
+	AppendLog(ctx context.Context, l store.ChangeLog) error
 }
 
 // Cleaner deduplicates/merges/relates verified candidates against historical
@@ -141,6 +142,11 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 			}); err != nil {
 				return nil, "", err
 			}
+			_ = c.store.AppendLog(ctx, store.ChangeLog{
+				AgentID: agentID, EntityKind: "interest_point", EntityID: created.ID,
+				Title: created.Name, Action: "supersede",
+				Edges: []store.LogEdge{{Action: "add", SourceID: v.RelationToID, TargetID: created.ID, Kind: store.EdgeSequel, Weight: 1}},
+			})
 		}
 		return created, v.RelationToID, nil
 	case verify.RelationUpdate:
@@ -179,6 +185,10 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 		if err := c.vec.Upsert(ctx, c.entryFor(merged, vecV)); err != nil {
 			return nil, "", err
 		}
+		_ = c.store.AppendLog(ctx, store.ChangeLog{
+			AgentID: agentID, EntityKind: "interest_point", EntityID: merged.ID,
+			Title: merged.Name, Action: "update",
+		})
 		return &merged, "", nil
 
 	case best != nil && float64(bestSim) >= c.cfg.SimilarityRelate:
@@ -191,6 +201,11 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 		if err := c.store.AddEdgePair(ctx, agentID, edge); err != nil {
 			return nil, "", err
 		}
+		_ = c.store.AppendLog(ctx, store.ChangeLog{
+			AgentID: agentID, EntityKind: "interest_point", EntityID: created.ID,
+			Title: created.Name, Action: "create",
+			Edges: []store.LogEdge{{Action: "add", SourceID: created.ID, TargetID: best.ID, Kind: store.EdgeRelated, Weight: float64(bestSim)}},
+		})
 		return created, "", nil
 
 	default:
@@ -215,6 +230,10 @@ func (c *cleaner) archive(ctx context.Context, agentID, id string) error {
 			return err
 		}
 	}
+	_ = c.store.AppendLog(ctx, store.ChangeLog{
+		AgentID: agentID, EntityKind: "interest_point", EntityID: id,
+		Title: p.Name, Action: "archive",
+	})
 	return c.vec.Delete(ctx, agentID, id)
 }
 
@@ -243,6 +262,10 @@ func (c *cleaner) create(ctx context.Context, agentID string, v verify.Verified,
 	if err := c.vec.Upsert(ctx, c.entryFor(pt, vecV)); err != nil {
 		return nil, err
 	}
+	_ = c.store.AppendLog(ctx, store.ChangeLog{
+		AgentID: agentID, EntityKind: "interest_point", EntityID: pt.ID,
+		Title: pt.Name, Action: "create",
+	})
 	return &pt, nil
 }
 
