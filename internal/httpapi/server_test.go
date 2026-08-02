@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
 	"interest-memory/internal/worker"
 )
@@ -21,6 +22,8 @@ type fakeService struct {
 	pages     []store.Page
 	stats     map[string]int
 	forkTx    *store.Transcript
+	searchRes []recall.Result
+	byIDRes   *recall.Result
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
@@ -35,6 +38,12 @@ func (f *fakeService) ListPages(context.Context, string, store.PageType) ([]stor
 func (f *fakeService) Stats(context.Context, string) (map[string]int, error) { return f.stats, nil }
 func (f *fakeService) ForkManual(context.Context, string) (*store.Transcript, error) {
 	return f.forkTx, nil
+}
+func (f *fakeService) Search(_ context.Context, _, _ string) ([]recall.Result, error) {
+	return f.searchRes, nil
+}
+func (f *fakeService) GetByID(_ context.Context, _, _ string) (*recall.Result, error) {
+	return f.byIDRes, nil
 }
 
 // fakeWorker implements Worker for handler tests.
@@ -199,6 +208,73 @@ func TestStats(t *testing.T) {
 		t.Fatalf("stats status = %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestSearchByQuery(t *testing.T) {
+	fs := &fakeService{searchRes: []recall.Result{{
+		Kind: "wiki_page", ID: "postgresql-page", Title: "PostgreSQL",
+		Outlinks: []recall.EdgeRef{{ID: "related", Title: "相关页", Kind: store.EdgeRelated, Weight: 0.9}},
+	}}}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/search?query=PostgreSQL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("search status = %d", resp.StatusCode)
+	}
+	var body struct {
+		Items []recall.Result `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ID != "postgresql-page" {
+		t.Errorf("items = %+v", body.Items)
+	}
+	if len(body.Items[0].Outlinks) != 1 || body.Items[0].Outlinks[0].Title != "相关页" {
+		t.Errorf("outlinks = %+v", body.Items[0].Outlinks)
+	}
+}
+
+func TestSearchById(t *testing.T) {
+	fs := &fakeService{byIDRes: &recall.Result{Kind: "interest_point", ID: "ip-1", Title: "点"}}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/search?id=ip-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("search by id status = %d", resp.StatusCode)
+	}
+	var body struct {
+		Items []recall.Result `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ID != "ip-1" {
+		t.Errorf("items = %+v", body.Items)
+	}
+}
+
+func TestSearchRequiresQueryOrId(t *testing.T) {
+	ts := newTestServer(&fakeService{}, &fakeWorker{})
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
 }
 
 func TestRoutesIncludesNoHealth(t *testing.T) {

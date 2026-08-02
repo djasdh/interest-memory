@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
 	"interest-memory/internal/worker"
 )
@@ -16,6 +17,8 @@ type Service interface {
 	ProcessSession(ctx context.Context, agentID string, t store.Transcript) error
 	SaveTranscript(ctx context.Context, t store.Transcript) error
 	Recall(ctx context.Context, agentID, query string) (string, error)
+	Search(ctx context.Context, agentID, query string) ([]recall.Result, error)
+	GetByID(ctx context.Context, agentID, id string) (*recall.Result, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]store.InterestPoint, error)
 	ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error)
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
@@ -53,6 +56,7 @@ func (s *Server) Routes() []Route {
 		{Pattern: "GET /api/v1/{agent}/recall", Handler: s.handleRecall},
 		{Pattern: "GET /api/v1/{agent}/interest-points", Handler: s.handleInterestPoints},
 		{Pattern: "GET /api/v1/{agent}/wiki/pages", Handler: s.handleWikiPages},
+		{Pattern: "GET /api/v1/{agent}/search", Handler: s.handleSearch},
 		{Pattern: "POST /api/v1/{agent}/fork", Handler: s.handleFork},
 		{Pattern: "GET /api/v1/{agent}/jobs/{id}", Handler: s.handleJob},
 		{Pattern: "GET /api/v1/{agent}/stats", Handler: s.handleStats},
@@ -134,6 +138,39 @@ func (s *Server) handleWikiPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": pages})
+}
+
+// handleSearch serves the consumer-side memory_search tool: ?query= does a
+// semantic retrieval (structured hits incl. edges); ?id= fetches one entity
+// by id. Requires one of them. id takes precedence when both are given.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	agent := r.PathValue("agent")
+	id := r.URL.Query().Get("id")
+	query := r.URL.Query().Get("query")
+
+	if id != "" {
+		item, err := s.svc.GetByID(r.Context(), agent, id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "get by id: "+err.Error())
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"items": []recall.Result{}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": []recall.Result{*item}})
+		return
+	}
+	if query == "" {
+		writeErr(w, http.StatusBadRequest, "missing 'query' or 'id'")
+		return
+	}
+	items, err := s.svc.Search(r.Context(), agent, query)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "search: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
