@@ -39,7 +39,7 @@ func (f *fakeService) Stats(context.Context, string) (map[string]int, error) { r
 func (f *fakeService) ForkManual(context.Context, string) (*store.Transcript, error) {
 	return f.forkTx, nil
 }
-func (f *fakeService) Search(_ context.Context, _, _ string) ([]recall.Result, error) {
+func (f *fakeService) Search(_ context.Context, _, _ string, _ int) ([]recall.Result, error) {
 	return f.searchRes, nil
 }
 func (f *fakeService) GetByID(_ context.Context, _, _ string) (*recall.Result, error) {

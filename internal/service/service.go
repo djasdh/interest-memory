@@ -173,9 +173,12 @@ func (s *Service) Recall(ctx context.Context, agentID, query string) (string, er
 }
 
 // Search is the consumer-side memory_search: structured hits with full
-// content + edges (see recall.Result).
-func (s *Service) Search(ctx context.Context, agentID, query string) ([]recall.Result, error) {
-	return s.recall.Search(ctx, agentID, query, s.cfg.Search.TopK, s.cfg.Search.MaxBodyLen)
+// content + edges (see recall.Result). topK<=0 falls back to config.
+func (s *Service) Search(ctx context.Context, agentID, query string, topK int) ([]recall.Result, error) {
+	if topK <= 0 {
+		topK = s.cfg.Search.TopK
+	}
+	return s.recall.Search(ctx, agentID, query, topK, s.cfg.Search.MaxBodyLen)
 }
 
 // GetByID fetches one entity (page or interest point) with full content +

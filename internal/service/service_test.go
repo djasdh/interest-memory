@@ -27,7 +27,7 @@ func (f *fakeRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.Res
 func TestServiceSearchPassthrough(t *testing.T) {
 	want := []recall.Result{{Kind: "wiki_page", ID: "pg", Title: "T"}}
 	svc := &Service{cfg: config.Config{Search: config.SearchConfig{TopK: 3, MaxBodyLen: 4000}}, recall: &fakeRecall{searchResults: want}}
-	got, err := svc.Search(context.Background(), "a", "q")
+	got, err := svc.Search(context.Background(), "a", "q", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

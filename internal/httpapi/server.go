@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
@@ -17,7 +18,7 @@ type Service interface {
 	ProcessSession(ctx context.Context, agentID string, t store.Transcript) error
 	SaveTranscript(ctx context.Context, t store.Transcript) error
 	Recall(ctx context.Context, agentID, query string) (string, error)
-	Search(ctx context.Context, agentID, query string) ([]recall.Result, error)
+	Search(ctx context.Context, agentID, query string, topK int) ([]recall.Result, error)
 	GetByID(ctx context.Context, agentID, id string) (*recall.Result, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]store.InterestPoint, error)
 	ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error)
@@ -165,7 +166,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing 'query' or 'id'")
 		return
 	}
-	items, err := s.svc.Search(r.Context(), agent, query)
+	topK := 0
+	if v := r.URL.Query().Get("top_k"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			topK = n
+		}
+	}
+	items, err := s.svc.Search(r.Context(), agent, query, topK)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "search: "+err.Error())
 		return
