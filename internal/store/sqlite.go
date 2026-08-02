@@ -158,6 +158,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			turn_count INTEGER NOT NULL DEFAULT 0,
 			raw_turns TEXT NOT NULL DEFAULT '',
 			received_at TIMESTAMP NOT NULL,
+			session_date TIMESTAMP,
 			processed_at TIMESTAMP,
 			PRIMARY KEY (session_id, agent_id)
 		)`,
@@ -188,6 +189,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE session_transcripts ADD COLUMN session_date TIMESTAMP`)
 	return nil
 }
 

@@ -272,6 +272,40 @@ func TestListTagsAggregates(t *testing.T) {
 	}
 }
 
+func TestTranscriptSessionDateRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	sd := now.Add(-24 * time.Hour)
+
+	// With session_date set.
+	if err := s.SaveTranscript(ctx, Transcript{SessionID: "s1", AgentID: "a", TurnCount: 2, RawTurns: "[]", ReceivedAt: now, SessionDate: &sd}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetTranscript(ctx, "a", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.SessionDate == nil || !got.SessionDate.Equal(sd) {
+		t.Errorf("session_date = %v, want %v", got.SessionDate, sd)
+	}
+	if !got.ReceivedAt.Equal(now) {
+		t.Errorf("received_at = %v, want %v (unchanged)", got.ReceivedAt, now)
+	}
+
+	// Without session_date (nil).
+	if err := s.SaveTranscript(ctx, Transcript{SessionID: "s2", AgentID: "a", TurnCount: 1, RawTurns: "[]", ReceivedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := s.GetTranscript(ctx, "a", "s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.SessionDate != nil {
+		t.Errorf("session_date = %v, want nil", got2.SessionDate)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

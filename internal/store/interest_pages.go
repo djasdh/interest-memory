@@ -336,14 +336,19 @@ func (s *SQLiteStore) ListContradictions(ctx context.Context, agentID string) ([
 // ── transcripts ───────────────────────────────────────────────────────────
 
 func (s *SQLiteStore) SaveTranscript(ctx context.Context, t Transcript) error {
+	var sd any
+	if t.SessionDate != nil {
+		sd = *t.SessionDate
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO session_transcripts (session_id, agent_id, turn_count, raw_turns, received_at, processed_at)
-		VALUES (?, ?, ?, ?, ?, NULL)
+		INSERT INTO session_transcripts (session_id, agent_id, turn_count, raw_turns, received_at, session_date, processed_at)
+		VALUES (?, ?, ?, ?, ?, ?, NULL)
 		ON CONFLICT(session_id, agent_id) DO UPDATE SET
 			turn_count = excluded.turn_count,
 			raw_turns = excluded.raw_turns,
-			received_at = excluded.received_at`,
-		t.SessionID, t.AgentID, t.TurnCount, t.RawTurns, t.ReceivedAt)
+			received_at = excluded.received_at,
+			session_date = excluded.session_date`,
+		t.SessionID, t.AgentID, t.TurnCount, t.RawTurns, t.ReceivedAt, sd)
 	if err != nil {
 		return fmt.Errorf("store: save transcript: %w", err)
 	}
@@ -352,11 +357,11 @@ func (s *SQLiteStore) SaveTranscript(ctx context.Context, t Transcript) error {
 
 func (s *SQLiteStore) GetTranscript(ctx context.Context, agentID, sessionID string) (*Transcript, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT session_id, agent_id, turn_count, raw_turns, received_at, processed_at
+		SELECT session_id, agent_id, turn_count, raw_turns, received_at, session_date, processed_at
 		FROM session_transcripts WHERE session_id = ? AND agent_id = ?`, sessionID, agentID)
 	var t Transcript
-	var processed sql.NullTime
-	err := row.Scan(&t.SessionID, &t.AgentID, &t.TurnCount, &t.RawTurns, &t.ReceivedAt, &processed)
+	var processed, sessionDate sql.NullTime
+	err := row.Scan(&t.SessionID, &t.AgentID, &t.TurnCount, &t.RawTurns, &t.ReceivedAt, &sessionDate, &processed)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -366,12 +371,15 @@ func (s *SQLiteStore) GetTranscript(ctx context.Context, agentID, sessionID stri
 	if processed.Valid {
 		t.ProcessedAt = &processed.Time
 	}
+	if sessionDate.Valid {
+		t.SessionDate = &sessionDate.Time
+	}
 	return &t, nil
 }
 
 func (s *SQLiteStore) ListUnprocessedTranscripts(ctx context.Context, agentID string) ([]Transcript, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id, agent_id, turn_count, raw_turns, received_at, processed_at
+		SELECT session_id, agent_id, turn_count, raw_turns, received_at, session_date, processed_at
 		FROM session_transcripts
 		WHERE agent_id = ? AND processed_at IS NULL
 		ORDER BY received_at ASC`, agentID)
@@ -382,12 +390,15 @@ func (s *SQLiteStore) ListUnprocessedTranscripts(ctx context.Context, agentID st
 	var out []Transcript
 	for rows.Next() {
 		var t Transcript
-		var processed sql.NullTime
-		if err := rows.Scan(&t.SessionID, &t.AgentID, &t.TurnCount, &t.RawTurns, &t.ReceivedAt, &processed); err != nil {
+		var processed, sessionDate sql.NullTime
+		if err := rows.Scan(&t.SessionID, &t.AgentID, &t.TurnCount, &t.RawTurns, &t.ReceivedAt, &sessionDate, &processed); err != nil {
 			return nil, err
 		}
 		if processed.Valid {
 			t.ProcessedAt = &processed.Time
+		}
+		if sessionDate.Valid {
+			t.SessionDate = &sessionDate.Time
 		}
 		out = append(out, t)
 	}

@@ -128,7 +128,8 @@ type Transcript struct {
 	AgentID     string     `json:"agent_id"`
 	TurnCount   int        `json:"turn_count"`
 	RawTurns    string     `json:"raw_turns"` // JSON: [{role, content}]
-	ReceivedAt  time.Time  `json:"received_at"`
+	ReceivedAt  time.Time  `json:"received_at"`            // 服务端接收时间
+	SessionDate *time.Time `json:"session_date,omitempty"` // 透传的会话开始时间（RFC3339，可空）
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
 
