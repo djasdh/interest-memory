@@ -6,8 +6,11 @@ import (
 	"time"
 
 	"interest-memory/internal/config"
+	"interest-memory/internal/fork"
 	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
+	"interest-memory/internal/vec"
+	"interest-memory/internal/verify"
 )
 
 // fakeRecall implements recall.RecallService for passthrough tests.
@@ -23,6 +26,71 @@ func (f *fakeRecall) Search(_ context.Context, _, _ string, topK, maxBodyLen int
 func (f *fakeRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.Result, error) {
 	return f.byID, nil
 }
+
+func TestPersistContradictionsLogsEdges(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	svc := &Service{store: st, verify: &fakeVerifier{cons: []store.Contradiction{
+		{ID: "con1", LeftID: "c1", RightID: "c2", Description: "矛盾", Status: "open"},
+	}}}
+	pts := []store.InterestPoint{{ID: "ip1", Name: "A"}, {ID: "ip2", Name: "B"}}
+	claims := []store.Claim{{ID: "c1", PageID: "ip1", Text: "x"}, {ID: "c2", PageID: "ip2", Text: "y"}}
+	if err := svc.persistContradictions(context.Background(), "agent-a", pts, claims); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := st.ListLogs(context.Background(), "agent-a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	if logs[0].Action != "edge_change" {
+		t.Errorf("log action = %q, want edge_change", logs[0].Action)
+	}
+	if len(logs[0].Edges) != 2 || logs[0].Edges[0].Kind != store.EdgeContradict {
+		t.Errorf("edges = %+v, want bidirectional contradicts", logs[0].Edges)
+	}
+}
+
+func TestServiceListLogsPassthrough(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.AppendLog(context.Background(), store.ChangeLog{ID: "l1", AgentID: "a", Action: "create"}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{store: st}
+	got, err := svc.ListLogs(context.Background(), "a", 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "l1" {
+		t.Errorf("logs = %+v", got)
+	}
+}
+
+// fakeVerifier implements verify.Verifier for the contradiction-log test.
+type fakeVerifier struct{ cons []store.Contradiction }
+
+func (f *fakeVerifier) VerifyCandidates(context.Context, string, []fork.Candidate) ([]verify.Verified, error) {
+	return nil, nil
+}
+func (f *fakeVerifier) CheckClaims(context.Context, string, []store.InterestPoint) ([]store.Claim, error) {
+	return nil, nil
+}
+func (f *fakeVerifier) FlagContradictions(context.Context, string, []store.Claim) ([]store.Contradiction, error) {
+	return f.cons, nil
+}
+func (f *fakeVerifier) GradeForRecall(context.Context, string, []vec.Hit) ([]verify.Graded, error) {
+	return nil, nil
+}
+func (f *fakeVerifier) FeedbackWrite(context.Context, string, []vec.Hit) error { return nil }
 
 func TestServiceSearchPassthrough(t *testing.T) {
 	want := []recall.Result{{Kind: "wiki_page", ID: "pg", Title: "T"}}

@@ -159,8 +159,20 @@ func (s *Service) persistContradictions(ctx context.Context, agentID string, pts
 		}); err != nil {
 			return err
 		}
+		_ = s.store.AppendLog(ctx, store.ChangeLog{
+			AgentID: agentID, EntityKind: "wiki_page", Action: "edge_change",
+			Edges: []store.LogEdge{
+				{Action: "add", SourceID: c.LeftID, TargetID: c.RightID, Kind: store.EdgeContradict, Weight: 1},
+				{Action: "add", SourceID: c.RightID, TargetID: c.LeftID, Kind: store.EdgeContradict, Weight: 1},
+			},
+		})
 	}
 	return nil
+}
+
+// ListLogs returns change logs for an agent, newest first, paginated.
+func (s *Service) ListLogs(ctx context.Context, agentID string, limit, offset int) ([]store.ChangeLog, error) {
+	return s.store.ListLogs(ctx, agentID, limit, offset)
 }
 
 // Recall wraps the recall service with configured defaults.
