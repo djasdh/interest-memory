@@ -27,6 +27,7 @@ type fakeService struct {
 	byIDRes   *recall.Result
 	logs      []store.ChangeLog
 	savedTx   *store.Transcript
+	recallOpts recall.Options
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
@@ -34,7 +35,10 @@ func (f *fakeService) SaveTranscript(_ context.Context, t store.Transcript) erro
 	f.savedTx = &t
 	return f.saveErr
 }
-func (f *fakeService) Recall(_ context.Context, _, _ string) (string, error)          { return f.recallOut, nil }
+func (f *fakeService) Recall(_ context.Context, _, _ string, opts recall.Options) (string, error) {
+	f.recallOpts = opts
+	return f.recallOut, nil
+}
 func (f *fakeService) ListInterestPoints(context.Context, string) ([]store.InterestPoint, error) {
 	return f.pts, nil
 }
@@ -144,6 +148,32 @@ func TestSessionsRejectsEmptyRawTurns(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRecallWithTimeParams(t *testing.T) {
+	fs := &fakeService{recallOut: "ctx"}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/recall?query=q&after=2026-07-01T00:00:00Z&before=2026-08-01T00:00:00Z&days=7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if fs.recallOpts.After == nil || fs.recallOpts.Before == nil {
+		t.Fatalf("time filters not parsed: %+v", fs.recallOpts)
+	}
+	wantA := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	wantB := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	if !fs.recallOpts.After.Equal(wantA) || !fs.recallOpts.Before.Equal(wantB) {
+		t.Errorf("after/before = %v / %v", fs.recallOpts.After, fs.recallOpts.Before)
+	}
+	if fs.recallOpts.RecentDays != 7 {
+		t.Errorf("days = %d, want 7", fs.recallOpts.RecentDays)
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 type Service interface {
 	ProcessSession(ctx context.Context, agentID string, t store.Transcript) error
 	SaveTranscript(ctx context.Context, t store.Transcript) error
-	Recall(ctx context.Context, agentID, query string) (string, error)
+	Recall(ctx context.Context, agentID, query string, opts recall.Options) (string, error)
 	Search(ctx context.Context, agentID, query string, topK int) ([]recall.Result, error)
 	GetByID(ctx context.Context, agentID, id string) (*recall.Result, error)
 	ListLogs(ctx context.Context, agentID string, limit, offset int) ([]store.ChangeLog, error)
@@ -122,7 +122,25 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing query")
 		return
 	}
-	ctxText, err := s.svc.Recall(r.Context(), agent, query)
+	var opts recall.Options
+	if v := r.URL.Query().Get("after"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			utc := t.UTC()
+			opts.After = &utc
+		}
+	}
+	if v := r.URL.Query().Get("before"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			utc := t.UTC()
+			opts.Before = &utc
+		}
+	}
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.RecentDays = n
+		}
+	}
+	ctxText, err := s.svc.Recall(r.Context(), agent, query, opts)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "recall: "+err.Error())
 		return

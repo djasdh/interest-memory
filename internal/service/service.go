@@ -179,13 +179,19 @@ func (s *Service) ListLogs(ctx context.Context, agentID string, limit, offset in
 	return s.store.ListLogs(ctx, agentID, limit, offset)
 }
 
-// Recall wraps the recall service with configured defaults.
-func (s *Service) Recall(ctx context.Context, agentID, query string) (string, error) {
-	return s.recall.Recall(ctx, agentID, query, recall.Options{
-		TopK:        s.cfg.Recall.TopK,
-		IncludeWiki: s.cfg.Recall.IncludeWiki,
-		MinScore:    s.cfg.Recall.MinScore,
-	})
+// Recall wraps the recall service, filling configured defaults for fields
+// the caller did not set (topK/includeWiki/minScore, temporal filters passthrough).
+func (s *Service) Recall(ctx context.Context, agentID, query string, opts recall.Options) (string, error) {
+	if opts.TopK <= 0 {
+		opts.TopK = s.cfg.Recall.TopK
+	}
+	if !opts.IncludeWiki {
+		opts.IncludeWiki = s.cfg.Recall.IncludeWiki
+	}
+	if opts.MinScore <= 0 {
+		opts.MinScore = s.cfg.Recall.MinScore
+	}
+	return s.recall.Recall(ctx, agentID, query, opts)
 }
 
 // Search is the consumer-side memory_search: structured hits with full
