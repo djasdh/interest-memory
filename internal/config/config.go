@@ -20,8 +20,10 @@ type Config struct {
 
 // VerifyConfig controls the correction layer (verify#1 fact-checking).
 type VerifyConfig struct {
-	UseWebSearch bool `yaml:"use_web_search"`
-	SearchMax    int  `yaml:"search_max"`
+	UseWebSearch   bool   `yaml:"use_web_search"`
+	SearchMax      int    `yaml:"search_max"`
+	WebTool        string `yaml:"web_tool"`        // 网络工具名（registry 中 active）
+	MaxConcurrency int    `yaml:"max_concurrency"` // 候选核查并行度
 }
 
 type ServerConfig struct {
@@ -45,7 +47,10 @@ type EmbeddingConfig struct {
 }
 
 type ForkConfig struct {
-	WindowTurns      int     `yaml:"window_turns"`
+	WindowTurns      int     `yaml:"window_turns"`       // 旧固定轮数窗口（Task 4 删除）
+	PrefixStep       int     `yaml:"prefix_step"`       // 前缀窗口按 user 回合的递增步长
+	MaxWindows       int     `yaml:"max_windows"`       // 前缀窗口上限（超限保留最长的 N 个）
+	MaxConcurrency   int     `yaml:"max_concurrency"`   // 窗口提取并行度
 	SimilarityMerge  float64 `yaml:"similarity_merge"`
 	SimilarityRelate float64 `yaml:"similarity_relate"`
 	ImportanceBoost  float64 `yaml:"importance_boost_per_seen"`
@@ -81,6 +86,9 @@ func Default() Config {
 		},
 		Fork: ForkConfig{
 			WindowTurns:      10,
+			PrefixStep:       5,
+			MaxWindows:       8,
+			MaxConcurrency:   4,
 			SimilarityMerge:  0.85,
 			SimilarityRelate: 0.50,
 			ImportanceBoost:  0.05,
@@ -88,8 +96,10 @@ func Default() Config {
 			MinConfidence:    0.3,
 		},
 		Verify: VerifyConfig{
-			UseWebSearch: true,
-			SearchMax:    5,
+			UseWebSearch:   true,
+			SearchMax:      5,
+			WebTool:        "myagent",
+			MaxConcurrency: 4,
 		},
 		Recall: RecallConfig{
 			TopK:        8,

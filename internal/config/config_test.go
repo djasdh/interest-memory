@@ -17,8 +17,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Server.DBPath == "" {
 		t.Error("default DBPath is empty")
 	}
-	if cfg.Fork.WindowTurns != 10 {
-		t.Errorf("default window_turns = %d, want 10", cfg.Fork.WindowTurns)
+	if cfg.Fork.PrefixStep != 5 {
+		t.Errorf("default prefix_step = %d, want 5", cfg.Fork.PrefixStep)
+	}
+	if cfg.Fork.MaxWindows != 8 {
+		t.Errorf("default max_windows = %d, want 8", cfg.Fork.MaxWindows)
+	}
+	if cfg.Fork.MaxConcurrency != 4 {
+		t.Errorf("default fork max_concurrency = %d, want 4", cfg.Fork.MaxConcurrency)
 	}
 	if cfg.Embedding.Dimensions != 1024 {
 		t.Errorf("default dimensions = %d, want 1024", cfg.Embedding.Dimensions)
@@ -35,6 +41,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Verify.SearchMax != 5 {
 		t.Errorf("default search_max = %d, want 5", cfg.Verify.SearchMax)
 	}
+	if cfg.Verify.WebTool != "myagent" {
+		t.Errorf("default web_tool = %q, want myagent", cfg.Verify.WebTool)
+	}
+	if cfg.Verify.MaxConcurrency != 4 {
+		t.Errorf("default verify max_concurrency = %d, want 4", cfg.Verify.MaxConcurrency)
+	}
 }
 
 func TestLoadFileOverrides(t *testing.T) {
@@ -45,7 +57,7 @@ server:
   port: 9999
   db_path: /tmp/custom.db
 fork:
-  window_turns: 5
+  prefix_step: 5
   similarity_merge: 0.9
 `
 	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
@@ -61,8 +73,8 @@ fork:
 	if cfg.Server.DBPath != "/tmp/custom.db" {
 		t.Errorf("db_path = %s, want /tmp/custom.db", cfg.Server.DBPath)
 	}
-	if cfg.Fork.WindowTurns != 5 {
-		t.Errorf("window_turns = %d, want 5", cfg.Fork.WindowTurns)
+	if cfg.Fork.PrefixStep != 5 {
+		t.Errorf("prefix_step = %d, want 5", cfg.Fork.PrefixStep)
 	}
 	if cfg.Fork.SimilarityMerge != 0.9 {
 		t.Errorf("similarity_merge = %f, want 0.9", cfg.Fork.SimilarityMerge)
