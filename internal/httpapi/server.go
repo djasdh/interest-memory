@@ -177,6 +177,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "search: "+err.Error())
 		return
 	}
+	if items == nil {
+		items = []recall.Result{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 

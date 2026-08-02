@@ -45,3 +45,8 @@ recall:
   top_k: 8
   include_wiki: true
   min_score: 0.30
+
+# 消费侧查询工具（memory_search）
+search:
+  top_k: 3                    # 语义检索默认返回数
+  max_body_len: 4000          # 正文/摘要截断上限（claims/evidence/边不截断）
