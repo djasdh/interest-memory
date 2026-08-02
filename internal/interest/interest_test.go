@@ -78,6 +78,23 @@ func TestCleanCreatesNew(t *testing.T) {
 	}
 }
 
+func TestCleanStoresTurnRange(t *testing.T) {
+	st := newFakeStore()
+	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
+	v := vv("带轮次的主题", 0.8)
+	v.Candidate.TurnRange = [2]int{2, 7}
+	out, err := c.Clean(context.Background(), "agent-a", []verify.Verified{v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("created = %d, want 1", len(out))
+	}
+	if out[0].TurnRange != [2]int{2, 7} {
+		t.Errorf("turn_range = %v, want [2 7]", out[0].TurnRange)
+	}
+}
+
 func TestCleanMergesHighSimilarity(t *testing.T) {
 	existing := &store.InterestPoint{ID: "existing-id", AgentID: "agent-a", Name: "old topic",
 		Importance: 0.5, SeenCount: 2, Keywords: []string{"old"}}
