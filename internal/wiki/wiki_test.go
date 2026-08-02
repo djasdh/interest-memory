@@ -306,6 +306,46 @@ func TestWriteToolLogsStatusChange(t *testing.T) {
 	}
 }
 
+func TestWriteToolPersistsTagsAndSources(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":      "pg-tag",
+		"title":   "Tagged",
+		"content": "内容",
+		"tags":    []any{"go", "database"},
+		"sources": []any{"https://x.example", "postgresql-page"},
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pg, err := st.GetPage(ctx, "agent-a", "pg-tag")
+	if err != nil || pg == nil {
+		t.Fatalf("page missing: %v", err)
+	}
+	if len(pg.Tags) != 2 || pg.Tags[0] != "go" {
+		t.Errorf("tags = %v, want [go database]", pg.Tags)
+	}
+	if len(pg.Sources) != 2 || pg.Sources[1] != "postgresql-page" {
+		t.Errorf("sources = %v", pg.Sources)
+	}
+}
+
+func TestWriteToolWithoutSourcesOK(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id": "no-src", "title": "NoSrc", "content": "x",
+	}, nil); err != nil {
+		t.Fatalf("write without sources (subjective exemption): %v", err)
+	}
+	pg, _ := st.GetPage(ctx, "agent-a", "no-src")
+	if pg == nil || len(pg.Sources) != 0 {
+		t.Errorf("sources should be empty when not provided: %+v", pg)
+	}
+}
+
 func TestWriteToolCreateAndUpdate(t *testing.T) {
 	deps, st, _ := newTestDeps(t)
 	ctx := context.Background()

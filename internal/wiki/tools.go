@@ -173,7 +173,8 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 			"page_type":   map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
 			"status":      map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
 			"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
-			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "分类法标签（用 wiki_tags 查已有标签，优先复用）"},
+			"sources":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "来源：关键网页 URL 或现有页 id（主观兴趣点可省略）"},
 				"session_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
 				"edges": map[string]any{
 					"type":  "array",
@@ -239,6 +240,10 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 	if len(tags) > 10 {
 		tags = tags[:10]
 	}
+	sources := stringList(args["sources"])
+	if len(sources) > 10 {
+		sources = sources[:10]
+	}
 	sessions := stringList(args["session_ids"])
 	if pageType == store.PageSource && len(sessions) > 0 {
 		content = "> Source sessions: " + strings.Join(sessions, ", ") + "\n\n" + content
@@ -277,6 +282,8 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		Title:     title,
 		BodyMD:    content,
 		Status:    status,
+		Tags:      tags,
+		Sources:   sources,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
