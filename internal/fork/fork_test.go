@@ -417,6 +417,41 @@ func contains(s, sub string) bool {
 	return len(s) >= len(sub) && indexOf(s, sub) >= 0
 }
 
+// TestMapTurnRangeClampsMalformedInput guards the panic fix: LLM-extracted
+// turn ranges are untrusted and may contain zero/negative endpoints that
+// previously crashed the worker (index out of range on idx[e-1]).
+func TestMapTurnRangeClampsMalformedInput(t *testing.T) {
+	idx := []int{0, 1, 2, 3, 4}
+	base := Candidate{Topic: "x", Confidence: 0.9}
+
+	// Regression: end == 0 previously panicked (idx[-1]).
+	for _, tr := range [][2]int{
+		{1, 0},
+		{2, -1},
+		{-3, 5},
+		{0, 3},
+		{5, 2}, // e < s after clamp → forced to s
+	} {
+		c := base
+		c.TurnRange = tr
+		got := mapTurnRange(c, idx)
+		if got.TurnRange[0] < 0 || got.TurnRange[1] < 0 ||
+			got.TurnRange[0] > got.TurnRange[1] {
+			t.Errorf("mapTurnRange(%v) = %v, want non-negative ordered range", tr, got.TurnRange)
+		}
+	}
+
+	// Zero range stays zero; empty index stays unchanged.
+	z := base
+	z.TurnRange = [2]int{0, 0}
+	if got := mapTurnRange(z, idx); got.TurnRange != [2]int{0, 0} {
+		t.Errorf("zero range should stay zero, got %v", got.TurnRange)
+	}
+	if got := mapTurnRange(base, nil); got.TurnRange != [2]int{0, 0} {
+		t.Errorf("empty idx should leave range untouched, got %v", got.TurnRange)
+	}
+}
+
 func indexOf(s, sub string) int {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

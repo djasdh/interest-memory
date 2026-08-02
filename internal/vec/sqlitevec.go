@@ -98,12 +98,18 @@ func (v *SQLiteVec) Upsert(ctx context.Context, e Entry) error {
 		return fmt.Errorf("vec: dimension mismatch: got %d want %d", len(e.Vector), v.dimensions)
 	}
 	name := tableName(kind)
-	// vec0 upsert: INSERT OR REPLACE by primary key id.
-	_, err := v.db.ExecContext(ctx, fmt.Sprintf(
-		`INSERT OR REPLACE INTO %s (embedding, id, agent_id, kind) VALUES (?, ?, ?, ?)`,
+	// vec0 has no reliable REPLACE semantics: INSERT OR REPLACE on a vec0
+	// virtual table surfaces as UNIQUE constraint failed when the id exists
+	// (observed in prod), which breaks pipeline retries. Delete-then-insert
+	// is idempotent and safe.
+	if _, err := v.db.ExecContext(ctx, fmt.Sprintf(
+		`DELETE FROM %s WHERE id = ?`, name), e.ID); err != nil {
+		return fmt.Errorf("vec: upsert %s: delete stale: %w", name, err)
+	}
+	if _, err := v.db.ExecContext(ctx, fmt.Sprintf(
+		`INSERT INTO %s (embedding, id, agent_id, kind) VALUES (?, ?, ?, ?)`,
 		name),
-		encodeFloat32s(e.Vector), e.ID, e.AgentID, kind)
-	if err != nil {
+		encodeFloat32s(e.Vector), e.ID, e.AgentID, kind); err != nil {
 		return fmt.Errorf("vec: upsert %s: %w", name, err)
 	}
 	return nil

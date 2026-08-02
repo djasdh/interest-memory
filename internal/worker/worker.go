@@ -45,12 +45,13 @@ var ErrNoJob = errors.New("worker: job not found")
 // channel and a dedicated goroutine, so concurrent EndSession pushes for the
 // same agent cannot interleave (design §五: worker 串行).
 type Worker struct {
-	mu     sync.Mutex
-	queues map[string]chan jobItem
-	jobs   map[string]*Job
-	closed bool
-	svc    Processor
-	store  store.Store
+	mu      sync.Mutex
+	queues  map[string]chan jobItem
+	jobs    map[string]*Job
+	closed  bool
+	svc     Processor
+	store   store.Store
+	timeout time.Duration
 }
 
 type jobItem struct {
@@ -60,13 +61,19 @@ type jobItem struct {
 }
 
 // New builds a worker. svc runs the pipeline; st supplies transcripts and
-// the processed marker. Job state is kept in memory.
-func New(svc Processor, st store.Store) *Worker {
+// the processed marker. Job state is kept in memory. jobTimeout caps each
+// job's total runtime (the wiki stage is serial per-point agent loops, so a
+// short timeout kills long sessions mid-pipeline — see config.WorkerConfig).
+func New(svc Processor, st store.Store, jobTimeout time.Duration) *Worker {
+	if jobTimeout <= 0 {
+		jobTimeout = 45 * time.Minute
+	}
 	return &Worker{
-		queues: make(map[string]chan jobItem),
-		jobs:   make(map[string]*Job),
-		svc:    svc,
-		store:  st,
+		queues:  make(map[string]chan jobItem),
+		jobs:    make(map[string]*Job),
+		svc:     svc,
+		store:   st,
+		timeout: jobTimeout,
 	}
 }
 
@@ -114,7 +121,7 @@ func (w *Worker) process(it jobItem) {
 	// Job lifecycle is independent of the HTTP request that enqueued it:
 	// always run on a fresh context so a completed request can't cancel the
 	// pipeline mid-flight.
-	runCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	runCtx, cancel := context.WithTimeout(context.Background(), w.timeout)
 	defer cancel()
 
 	w.setStatus(it.jobID, StatusRunning, "")

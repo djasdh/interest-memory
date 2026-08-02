@@ -72,6 +72,43 @@ func TestUpsertAndSearch(t *testing.T) {
 	}
 }
 
+// TestUpsertIdempotent guards the DELETE+INSERT fix: re-upserting the same id
+// must succeed and replace the vector (vec0's INSERT OR REPLACE previously
+// failed with UNIQUE constraint, breaking pipeline retries).
+func TestUpsertIdempotent(t *testing.T) {
+	v, _ := newVec(t)
+	ctx := context.Background()
+	if err := v.Upsert(ctx, Entry{ID: "p1", AgentID: "ag", Kind: "wiki_page", Vector: []float32{1, 0, 0}}); err != nil {
+		t.Fatalf("first Upsert: %v", err)
+	}
+	// Same id, different vector — must replace, not fail.
+	if err := v.Upsert(ctx, Entry{ID: "p1", AgentID: "ag", Kind: "wiki_page", Vector: []float32{0, 1, 0}}); err != nil {
+		t.Fatalf("second Upsert (same id): %v", err)
+	}
+	hits, err := v.Search(ctx, "ag", []float32{0, 1, 0}, 4)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) == 0 || hits[0].ID != "p1" {
+		t.Fatalf("after re-upsert hits = %+v, want p1 on top", hits)
+	}
+	// Exactly one row for p1.
+	rows, err := v.db.QueryContext(ctx, "SELECT COUNT(*) FROM vec_wiki_page WHERE id = 'p1'")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("vec_wiki_page rows for p1 = %d, want 1", n)
+		}
+	}
+}
+
 func TestDelete(t *testing.T) {
 	v, _ := newVec(t)
 	ctx := context.Background()

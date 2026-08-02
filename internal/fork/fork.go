@@ -268,11 +268,20 @@ func mapTurnRange(c Candidate, idx []int) Candidate {
 		return c
 	}
 	s, e := c.TurnRange[0], c.TurnRange[1]
+	// Clamp both ends into [1, len(idx)]. LLM output is untrusted: a
+	// negative/zero end previously fell through to idx[e-1] and panicked
+	// (index out of range), crashing the whole worker mid-pipeline.
 	if s < 1 {
 		s = 1
 	}
+	if e < 1 {
+		e = 1
+	}
 	if e > len(idx) {
 		e = len(idx)
+	}
+	if e < s {
+		e = s
 	}
 	if s > len(idx) {
 		return c

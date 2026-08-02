@@ -57,7 +57,7 @@ func main() {
 	embedder := llm.NewEmbedder(cfg.Embedding)
 
 	svc := service.New(cfg, st, vi, llmClient, embedder)
-	wk := worker.New(svc, st)
+	wk := worker.New(svc, st, cfg.Worker.JobTimeout)
 	defer wk.Close()
 
 	// Stage 5: the my-agent-core gateway is the single HTTP layer. It provides

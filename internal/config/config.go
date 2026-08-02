@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -19,6 +20,12 @@ type Config struct {
 	Search    SearchConfig    `yaml:"search"`
 	Log       LogConfig       `yaml:"log"`
 	Recall    RecallConfig    `yaml:"recall"`
+	Worker    WorkerConfig    `yaml:"worker"`
+}
+
+// WorkerConfig controls the async transcript-processing worker.
+type WorkerConfig struct {
+	JobTimeout time.Duration `yaml:"job_timeout"` // per-job context timeout
 }
 
 // LogConfig controls the change-log retention.
@@ -122,6 +129,12 @@ func Default() Config {
 		Wiki: WikiConfig{
 			MaxHops:   3,
 			BatchSize: 10,
+		},
+		Worker: WorkerConfig{
+			// Default 45min: the wiki stage runs one agent loop per interest
+			// point serially, each with its own 10min cap; 15min was too short
+			// for long sessions (observed: 62-point job killed mid-wiki).
+			JobTimeout: 45 * time.Minute,
 		},
 		Search: SearchConfig{
 			TopK:       3,

@@ -54,7 +54,7 @@ func TestEnqueueAndDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := &fakeProcessor{}
-	w := New(fp, st)
+	w := New(fp, st, 5*time.Minute)
 	defer w.Close()
 
 	jobID, err := w.Enqueue(ctx, "agent-a", "s1")
@@ -98,7 +98,7 @@ func TestSerialPerAgent(t *testing.T) {
 		}
 	}
 	fp := &fakeProcessor{}
-	w := New(fp, st)
+	w := New(fp, st, 5*time.Minute)
 	defer w.Close()
 
 	for _, sid := range []string{"sa", "sb", "sc"} {
@@ -135,7 +135,7 @@ func TestJobFailedKeepsTranscriptUnprocessed(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := &fakeProcessor{fail: errors.New("boom")}
-	w := New(fp, st)
+	w := New(fp, st, 5*time.Minute)
 	defer w.Close()
 
 	jobID, _ := w.Enqueue(ctx, "agent-a", "s1")
@@ -162,7 +162,7 @@ func TestJobFailedKeepsTranscriptUnprocessed(t *testing.T) {
 
 func TestGetJobNotFound(t *testing.T) {
 	st := newWorkerTestStore(t)
-	w := New(&fakeProcessor{}, st)
+	w := New(&fakeProcessor{}, st, 5*time.Minute)
 	defer w.Close()
 	if _, err := w.GetJob(context.Background(), "nope"); err != ErrNoJob {
 		t.Fatalf("GetJob = %v, want ErrNoJob", err)
