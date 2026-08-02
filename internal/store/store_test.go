@@ -233,6 +233,45 @@ func TestPageTagsAndSourcesPersisted(t *testing.T) {
 	}
 }
 
+func TestListTagsAggregates(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	pages := []Page{
+		{ID: "p1", AgentID: "a", Title: "1", Tags: []string{"go", "database"}, CreatedAt: now, UpdatedAt: now},
+		{ID: "p2", AgentID: "a", Title: "2", Tags: []string{"go", "backend"}, CreatedAt: now, UpdatedAt: now},
+		{ID: "p3", AgentID: "b", Title: "3", Tags: []string{"go"}, CreatedAt: now, UpdatedAt: now},
+	}
+	for _, p := range pages {
+		if err := s.UpsertPage(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tags, err := s.ListTags(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, tc := range tags {
+		counts[tc.Tag] = tc.Count
+	}
+	if counts["go"] != 2 || counts["database"] != 1 || counts["backend"] != 1 {
+		t.Errorf("agent-a tags = %v, want go:2 database:1 backend:1", counts)
+	}
+	if len(tags) != 3 {
+		t.Errorf("tag count = %d, want 3 (deduped)", len(tags))
+	}
+	// Count descending: go first.
+	if tags[0].Tag != "go" || tags[0].Count != 2 {
+		t.Errorf("tags order = %+v, want go first", tags)
+	}
+	// Agent isolation.
+	bt, _ := s.ListTags(ctx, "b")
+	if len(bt) != 1 || bt[0].Tag != "go" {
+		t.Errorf("agent-b tags = %+v", bt)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

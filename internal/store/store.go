@@ -17,6 +17,8 @@ type Store interface {
 	GetPage(ctx context.Context, agentID, id string) (*Page, error)
 	ListPages(ctx context.Context, agentID string, pageType PageType) ([]Page, error)
 	SearchPagesByKeywords(ctx context.Context, agentID, query string, limit int) ([]Page, error)
+	// ListTags aggregates page tags for the agent (tag taxonomy), count desc.
+	ListTags(ctx context.Context, agentID string) ([]TagCount, error)
 
 	// ---- adjacency edges (双链) ----
 	UpsertEdge(ctx context.Context, agentID string, e Edge) error
