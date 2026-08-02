@@ -110,13 +110,76 @@ func TestVerifyClaimsToolDegradesWithoutSearch(t *testing.T) {
 	}
 }
 
-func TestVerifyClaimsToolDegradesWithoutLLM(t *testing.T) {
-	deps, _, _ := newTestDeps(t)
-	tool := NewVerifyClaimsTool(deps)
-	if _, err := tool.Execute(types.Context{}, types.ArgsMap{"text": "x"}, nil); err != nil {
-		t.Fatalf("expected degraded no-error, got %v", err)
+func TestReviewToolSuggestsAgainstExisting(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	// Seed an existing page about the same topic.
+	if err := st.UpsertPage(context.Background(), store.Page{
+		ID: "postgresql", AgentID: "a", Title: "PostgreSQL", BodyMD: "我们用 PostgreSQL 作为默认数据库",
+		Status: "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpsertEdge(context.Background(), "a", store.Edge{SourceID: "postgresql", TargetID: "x", Kind: store.EdgeRelated, Weight: 1})
+	// Seed vec metadata so keyword search finds it.
+	if err := deps.Vec.Upsert(context.Background(), vec.Entry{
+		ID: "postgresql", AgentID: "a", Kind: "wiki_page",
+		Metadata: map[string]string{"title": "PostgreSQL", "body": "我们用 PostgreSQL 作为默认数据库"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &fakeLLM{resp: map[string]any{
+		"summary": "建议核对",
+		"suggestions": []map[string]any{
+			{"type": "duplicate", "page_id": "postgresql", "message": "与现有页重复"},
+		},
+	}}
+	deps.LLM = l
+
+	tool := NewReviewTool(deps, "a")
+	if tool.Name != "review" {
+		t.Errorf("tool name = %q, want review", tool.Name)
+	}
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{
+		"draft": "PostgreSQL 作为默认数据库，JSONB 好用",
+	}, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if l.calls != 1 {
+		t.Errorf("llm calls = %d, want 1", l.calls)
+	}
+	var got struct {
+		Suggestion []struct {
+			Type    string `json:"type"`
+			PageID  string `json:"page_id"`
+			Message string `json:"message"`
+		} `json:"suggestions"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if len(got.Suggestion) != 1 || got.Suggestion[0].PageID != "postgresql" {
+		t.Errorf("suggestions = %+v", got.Suggestion)
+	}
+	// Read-only: review must not write anything.
+	p, err := st.GetPage(context.Background(), "a", "postgresql")
+	if err != nil || p == nil || p.BodyMD != "我们用 PostgreSQL 作为默认数据库" {
+		t.Errorf("review modified the store: page = %+v err=%v", p, err)
 	}
 }
+
+func TestReviewToolDegradesWithoutLLM(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	tool := NewReviewTool(deps, "a")
+	out, err := tool.Execute(types.Context{}, types.ArgsMap{"draft": "x"}, nil)
+	if err != nil {
+		t.Fatalf("expected degraded no-error, got %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected non-empty degraded output")
+	}
+}
+
 
 
 func TestWriteToolCreateAndUpdate(t *testing.T) {
