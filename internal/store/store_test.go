@@ -104,6 +104,91 @@ func TestPageStatusPersisted(t *testing.T) {
 	}
 }
 
+func TestChangeLogAppendAndList(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	logs := []ChangeLog{
+		{ID: "l1", AgentID: "a", EntityKind: "wiki_page", EntityID: "pg1", Title: "Page1", Action: "create",
+			Edges: []LogEdge{{Action: "add", SourceID: "ip1", TargetID: "pg1", Kind: EdgeHasPage, Weight: 1}}},
+		{ID: "l2", AgentID: "a", EntityKind: "interest_point", EntityID: "ip1", Title: "点1", Action: "archive"},
+	}
+	for _, l := range logs {
+		if err := s.AppendLog(ctx, l); err != nil {
+			t.Fatalf("AppendLog: %v", err)
+		}
+	}
+	got, err := s.ListLogs(ctx, "a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 倒序：最新在前
+	if len(got) != 2 || got[0].ID != "l2" || got[1].ID != "l1" {
+		t.Errorf("logs order = %+v, want [l2 l1]", idsOfLogs(got))
+	}
+	if len(got[1].Edges) != 1 || got[1].Edges[0].Kind != EdgeHasPage {
+		t.Errorf("edges = %+v", got[1].Edges)
+	}
+	// Agent 隔离
+	other, _ := s.ListLogs(ctx, "b", 0, 0)
+	if len(other) != 0 {
+		t.Errorf("agent-b logs = %d, want 0", len(other))
+	}
+}
+
+func TestChangeLogListPagination(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if err := s.AppendLog(ctx, ChangeLog{ID: fmt.Sprintf("l%d", i), AgentID: "a", EntityID: "e", Title: "t", Action: "update"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// limit=2, offset=1 → 倒序 [l3 l2]
+	got, err := s.ListLogs(ctx, "a", 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "l3" || got[1].ID != "l2" {
+		t.Errorf("paged = %+v, want [l3 l2]", idsOfLogs(got))
+	}
+}
+
+func TestChangeLogRetainCaps(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if err := s.AppendLog(ctx, ChangeLog{ID: fmt.Sprintf("l%d", i), AgentID: "a", EntityID: "e", Title: "t", Action: "update"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetLogRetain(ctx, "a", 3); err != nil {
+		t.Fatal(err)
+	}
+	// 追加一条触发清理 → 只保留最近 3 条
+	if err := s.AppendLog(ctx, ChangeLog{ID: "l5", AgentID: "a", EntityID: "e", Title: "t", Action: "update"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListLogs(ctx, "a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("logs after retain = %d, want 3", len(got))
+	}
+	if got[0].ID != "l5" {
+		t.Errorf("newest = %s, want l5", got[0].ID)
+	}
+}
+
+func idsOfLogs(logs []ChangeLog) []string {
+	out := make([]string, len(logs))
+	for i, l := range logs {
+		out[i] = l.ID
+	}
+	return out
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

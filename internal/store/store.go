@@ -44,5 +44,10 @@ type Store interface {
 	ListUnprocessedTranscripts(ctx context.Context, agentID string) ([]Transcript, error)
 	MarkTranscriptProcessed(ctx context.Context, agentID, sessionID string) error
 
+	// ---- change log ----
+	AppendLog(ctx context.Context, l ChangeLog) error
+	ListLogs(ctx context.Context, agentID string, limit, offset int) ([]ChangeLog, error)
+	SetLogRetain(ctx context.Context, agentID string, n int) error
+
 	Close() error
 }

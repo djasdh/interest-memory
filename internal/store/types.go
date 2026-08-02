@@ -123,3 +123,27 @@ type Transcript struct {
 	ReceivedAt  time.Time  `json:"received_at"`
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
+
+// LogEdge is one structural edge change (add/remove) recorded in a ChangeLog.
+// Only structural kinds (has_page/related/contradicts/sequel) are logged;
+// references (wikilink rebuild diff) is excluded.
+type LogEdge struct {
+	Action   string   `json:"action"` // add | remove
+	SourceID string   `json:"source_id"`
+	TargetID string   `json:"target_id"`
+	Kind     EdgeType `json:"kind"`
+	Weight   float64  `json:"weight"`
+}
+
+// ChangeLog records one structural change: entity title, action, and the
+// structural edges touched. No LLM-generated reason is stored.
+type ChangeLog struct {
+	ID         string    `json:"id"`
+	AgentID    string    `json:"agent_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	EntityKind string    `json:"entity_kind"` // interest_point | wiki_page
+	EntityID   string    `json:"entity_id"`
+	Title      string    `json:"title"`
+	Action     string    `json:"action"` // create | update | merge | archive | supersede | edge_change
+	Edges      []LogEdge `json:"edges,omitempty"`
+}
