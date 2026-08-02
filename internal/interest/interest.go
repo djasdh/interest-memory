@@ -22,6 +22,7 @@ type Embedder interface {
 type VectorIndex interface {
 	Search(ctx context.Context, agentID string, q []float32, topK int) ([]vec.Hit, error)
 	Upsert(ctx context.Context, e vec.Entry) error
+	Delete(ctx context.Context, agentID, id string) error
 }
 
 // Store is the persistence surface interest cleaning needs
@@ -107,6 +108,55 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 
 	now := store.Freshness{Level: v.Freshness.Level, UpdatedAt: v.Freshness.UpdatedAt, TTLDays: v.Freshness.TTLDays}
 
+	// The verify#1 relation verdict takes precedence over pure similarity
+	// thresholds: it decides how to touch the most similar historical point.
+	switch v.Relation {
+	case verify.RelationDelete:
+		if v.RelationToID != "" {
+			if err := c.archive(ctx, agentID, v.RelationToID); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	case verify.RelationSupersede:
+		if v.RelationToID != "" {
+			if err := c.archive(ctx, agentID, v.RelationToID); err != nil {
+				return nil, err
+			}
+		}
+		created, err := c.create(ctx, agentID, v, vecV, now)
+		if err != nil {
+			return nil, err
+		}
+		if v.RelationToID != "" {
+			if err := c.store.AddEdgePair(ctx, agentID, store.Edge{
+				SourceID: v.RelationToID, TargetID: created.ID,
+				Kind: store.EdgeSequel, Weight: 1,
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return created, nil
+	case verify.RelationUpdate:
+		if v.RelationToID != "" {
+			existing, err := c.store.GetInterestPoint(ctx, agentID, v.RelationToID)
+			if err != nil {
+				return nil, err
+			}
+			if existing != nil {
+				merged := c.merge(existing, v)
+				if err := c.store.UpsertInterestPoint(ctx, merged); err != nil {
+					return nil, err
+				}
+				if err := c.vec.Upsert(ctx, c.entryFor(merged, vecV)); err != nil {
+					return nil, err
+				}
+				return &merged, nil
+			}
+		}
+		// Historical point vanished: fall through to the default path.
+	}
+
 	switch {
 	case best != nil && float64(bestSim) >= c.cfg.SimilarityMerge:
 		// Merge into the existing interest point.
@@ -141,6 +191,25 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 	}
 }
 
+// archive marks an interest point archived and removes its vector so recall
+// no longer surfaces it (the store record is kept for provenance).
+func (c *cleaner) archive(ctx context.Context, agentID, id string) error {
+	p, err := c.store.GetInterestPoint(ctx, agentID, id)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return nil
+	}
+	if p.Status != "archived" {
+		p.Status = "archived"
+		if err := c.store.UpsertInterestPoint(ctx, *p); err != nil {
+			return err
+		}
+	}
+	return c.vec.Delete(ctx, agentID, id)
+}
+
 // create persists a new interest point and its vector.
 func (c *cleaner) create(ctx context.Context, agentID string, v verify.Verified, vecV []float32, fresh store.Freshness) (*store.InterestPoint, error) {
 	pt := store.InterestPoint{
@@ -151,6 +220,7 @@ func (c *cleaner) create(ctx context.Context, agentID string, v verify.Verified,
 		Keywords:       v.Candidate.Tags,
 		Importance:     v.Candidate.Confidence,
 		Status:         "active",
+		Subjective:     v.Subjective,
 		Reliability:    v.Reliability,
 		Freshness:      fresh,
 		FirstSeenAt:    fresh.UpdatedAt,
