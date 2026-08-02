@@ -4,25 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"interest-memory/internal/fork"
 	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
+	"interest-memory/internal/websearch"
 )
 
-// fakeLLM returns a canned JSON per call, optionally erroring.
+// fakeLLM returns a canned JSON per call, optionally erroring. Thread-safe:
+// VerifyCandidates runs candidates concurrently.
 type fakeLLM struct {
 	responses []any // one per ChatJSON call, consumed in order
 	idx       int
 	err       error
-	lastMsgs  []llm.Message
+	mu        chan struct{}
 }
 
-func (f *fakeLLM) ChatJSON(_ context.Context, msgs []llm.Message, out any) error {
-	f.lastMsgs = msgs
-	if f.err != nil {
-		return f.err
+func (f *fakeLLM) next() []byte {
+	if f.mu != nil {
+		<-f.mu
+		defer func() { f.mu <- struct{}{} }()
 	}
 	var payload []byte
 	if f.idx < len(f.responses) {
@@ -31,21 +34,63 @@ func (f *fakeLLM) ChatJSON(_ context.Context, msgs []llm.Message, out any) error
 	} else {
 		payload = []byte("{}")
 	}
-	return json.Unmarshal(payload, out)
+	return payload
+}
+
+func (f *fakeLLM) ChatJSON(_ context.Context, msgs []llm.Message, out any) error {
+	if f.err != nil {
+		return f.err
+	}
+	return json.Unmarshal(f.next(), out)
+}
+
+func newSerialFakeLLM(responses []any) *fakeLLM {
+	mu := make(chan struct{}, 1)
+	mu <- struct{}{}
+	return &fakeLLM{responses: responses, mu: mu}
 }
 
 type fakeSearcher struct {
-	items []SearchItem
+	items []websearch.SearchItem
 	err   error
 	calls int
 }
 
-func (f *fakeSearcher) Search(_ context.Context, _ string, _ int) ([]SearchItem, error) {
+func (f *fakeSearcher) Search(_ context.Context, _ string, _ int) ([]websearch.SearchItem, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.items, nil
+}
+
+type fakeRetriever struct {
+	hits []vec.Hit
+	err  error
+}
+
+func (f *fakeRetriever) Search(_ context.Context, _ string, _ []float32, _ int) ([]vec.Hit, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.hits, nil
+}
+
+type fakeEmbedder struct {
+	v     []float32
+	err   error
+	calls int
+}
+
+func (f *fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.v == nil {
+		return make([]float32, 8), nil
+	}
+	return f.v, nil
 }
 
 type fakeStore struct {
@@ -73,15 +118,16 @@ func cands(n int) []fork.Candidate {
 }
 
 func TestVerifyCandidatesSupported(t *testing.T) {
-	f := &fakeLLM{responses: []any{map[string]any{
-		"supported":       true,
-		"confidence":       0.9,
-		"status":           "supported",
-		"evidence":         []string{"matches known facts"},
-		"freshness_level":  "fresh",
-		"ttl_days":         90,
-	}}}
-	v := New(f, &fakeStore{}, &fakeSearcher{items: []SearchItem{{Title: "t", URL: "u", Snippet: "s"}}}, Config{UseWebSearch: true, SearchMax: 5})
+	f := newSerialFakeLLM([]any{map[string]any{
+		"supported":      true,
+		"confidence":     0.9,
+		"status":         "supported",
+		"evidence":       []string{"matches known facts"},
+		"freshness_level": "fresh",
+		"ttl_days":       90,
+	}})
+	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "u", Snippet: "s"}}}
+	v := New(f, &fakeStore{}, se, nil, nil, Config{UseWebSearch: true, SearchMax: 5})
 	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1))
 	if err != nil {
 		t.Fatalf("VerifyCandidates error: %v", err)
@@ -102,8 +148,9 @@ func TestVerifyCandidatesSupported(t *testing.T) {
 }
 
 func TestVerifyCandidatesDegradesOnLLMError(t *testing.T) {
-	f := &fakeLLM{err: context.DeadlineExceeded}
-	v := New(f, &fakeStore{}, nil, Config{UseWebSearch: false})
+	f := newSerialFakeLLM(nil)
+	f.err = context.DeadlineExceeded
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{UseWebSearch: false})
 	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(2))
 	if err != nil {
 		t.Fatalf("expected no pipeline error, got %v", err)
@@ -117,9 +164,9 @@ func TestVerifyCandidatesDegradesOnLLMError(t *testing.T) {
 }
 
 func TestVerifyCandidatesSkipsSearchWhenDisabled(t *testing.T) {
-	se := &fakeSearcher{items: []SearchItem{{Title: "t", URL: "u"}}}
-	f := &fakeLLM{responses: []any{map[string]any{"status": "unknown"}}}
-	v := New(f, &fakeStore{}, se, Config{UseWebSearch: false})
+	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "u"}}}
+	f := newSerialFakeLLM([]any{map[string]any{"status": "unknown"}})
+	v := New(f, &fakeStore{}, se, nil, nil, Config{UseWebSearch: false})
 	if _, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -128,17 +175,152 @@ func TestVerifyCandidatesSkipsSearchWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestVerifyCandidatesSkipsSearchWhenSubjective(t *testing.T) {
+	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "u"}}}
+	f := newSerialFakeLLM([]any{map[string]any{"status": "supported", "confidence": 0.8}})
+	v := New(f, &fakeStore{}, se, nil, nil, Config{UseWebSearch: true, SearchMax: 5})
+	c := cands(1)
+	c[0].Subjective = true
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", c)
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	if se.calls != 0 {
+		t.Errorf("searcher calls = %d, want 0 (subjective skips web)", se.calls)
+	}
+	if len(out) != 1 {
+		t.Fatalf("verified = %d, want 1", len(out))
+	}
+	if !out[0].Subjective {
+		t.Error("subjective flag not propagated")
+	}
+	// The LLM verdict still runs for subjective candidates.
+	if out[0].Reliability.Status != "supported" {
+		t.Errorf("status = %s, want supported (verification still runs)", out[0].Reliability.Status)
+	}
+}
+
+func TestVerifyCandidatesRelationUpdate(t *testing.T) {
+	hist := &store.InterestPoint{ID: "old1", Name: "旧偏好", Summary: "喜欢 X"}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"status": "supported", "confidence": 0.8,
+		"relation": "update", "relation_reason": "用户改主意了",
+	}})
+	ri := &fakeRetriever{hits: []vec.Hit{{ID: "old1", Kind: "interest_point", Score: 0.92}}}
+	emb := &fakeEmbedder{}
+	v := New(f, &fakeStore{ip: hist}, nil, ri, emb, Config{})
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1))
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	if emb.calls != 1 {
+		t.Errorf("embedder calls = %d, want 1", emb.calls)
+	}
+	got := out[0]
+	if got.Relation != RelationUpdate {
+		t.Errorf("relation = %q, want update", got.Relation)
+	}
+	if got.RelationToID != "old1" {
+		t.Errorf("relation_to_id = %q, want old1", got.RelationToID)
+	}
+	if got.RelationReason != "用户改主意了" {
+		t.Errorf("relation_reason = %q", got.RelationReason)
+	}
+}
+
+func TestVerifyCandidatesRelationSupersedeAndDelete(t *testing.T) {
+	hist := &store.InterestPoint{ID: "old2", Name: "旧观点"}
+	ri := &fakeRetriever{hits: []vec.Hit{{ID: "old2", Kind: "interest_point", Score: 0.9}}}
+	// Concurrent candidate↔response mapping is not deterministic, so each
+	// relation is verified with a single-candidate call.
+	for _, tc := range []struct {
+		wantRel string
+		resp    map[string]any
+	}{
+		{"supersede", map[string]any{"relation": "supersede"}},
+		{"delete", map[string]any{"relation": "delete"}},
+	} {
+		t.Run(tc.wantRel, func(t *testing.T) {
+			f := newSerialFakeLLM([]any{tc.resp})
+			v := New(f, &fakeStore{ip: hist}, nil, ri, &fakeEmbedder{}, Config{})
+			out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1))
+			if err != nil {
+				t.Fatalf("VerifyCandidates error: %v", err)
+			}
+			if out[0].Relation != Relation(tc.wantRel) || out[0].RelationToID != "old2" {
+				t.Errorf("relation = %q to %q, want %s/old2", out[0].Relation, out[0].RelationToID, tc.wantRel)
+			}
+		})
+	}
+}
+
+func TestVerifyCandidatesRelationNoneWithoutHistory(t *testing.T) {
+	f := newSerialFakeLLM([]any{map[string]any{"relation": "update"}})
+	// No retriever/embedder → no history → relation forced to none.
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1))
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	if out[0].Relation != RelationNone || out[0].RelationToID != "" {
+		t.Errorf("relation = %q to %q, want none to empty", out[0].Relation, out[0].RelationToID)
+	}
+}
+
+func TestWebEvidenceLocators(t *testing.T) {
+	se := &fakeSearcher{items: []websearch.SearchItem{{Title: "t", URL: "https://x.example", Snippet: "snip"}}}
+	f := newSerialFakeLLM([]any{map[string]any{"status": "supported", "confidence": 0.8}})
+	v := New(f, &fakeStore{}, se, nil, nil, Config{UseWebSearch: true, SearchMax: 5})
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(1))
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	ev := out[0].Reliability.Evidence
+	if len(ev) == 0 {
+		t.Fatal("no evidence")
+	}
+	if ev[0].URL != "https://x.example" {
+		t.Errorf("evidence URL = %q", ev[0].URL)
+	}
+	if ev[0].Query == "" {
+		t.Error("evidence Query empty")
+	}
+	if ev[0].CapturedAt.IsZero() {
+		t.Error("evidence CapturedAt zero")
+	}
+}
+
+func TestSessionEvidenceHasTurnRange(t *testing.T) {
+	// Subjective candidate → no web evidence → session evidence with TurnRange.
+	f := newSerialFakeLLM([]any{map[string]any{"status": "supported"}})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{UseWebSearch: true})
+	c := cands(1)
+	c[0].Subjective = true
+	c[0].TurnRange = [2]int{3, 4}
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", c)
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	ev := out[0].Reliability.Evidence
+	if len(ev) != 1 || ev[0].Kind != "session" {
+		t.Fatalf("evidence = %+v, want single session evidence", ev)
+	}
+	if ev[0].TurnRange != [2]int{3, 4} {
+		t.Errorf("turn_range = %v, want [3 4]", ev[0].TurnRange)
+	}
+}
+
 func TestCheckClaims(t *testing.T) {
-	f := &fakeLLM{responses: []any{map[string]any{
+	f := newSerialFakeLLM([]any{map[string]any{
 		"claims": []map[string]any{
 			{"text": "A is true", "confidence": 0.9, "status": "supported", "evidence": []string{"reason"}},
 			{"text": "B is true", "confidence": 0.6, "status": "contested"},
 		},
-	}}}
+	}})
 	pt := store.InterestPoint{ID: "ip1", AgentID: "a", Name: "X", Summary: "S",
 		Reliability: store.Reliability{Confidence: 0.9, Status: "supported"},
 		Freshness:   store.Freshness{Level: "fresh"}}
-	v := New(f, &fakeStore{}, nil, Config{})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
 	claims, err := v.CheckClaims(context.Background(), "a", []store.InterestPoint{pt})
 	if err != nil {
 		t.Fatal(err)
@@ -155,11 +337,12 @@ func TestCheckClaims(t *testing.T) {
 }
 
 func TestCheckClaimsDegradesOnError(t *testing.T) {
-	f := &fakeLLM{err: context.Canceled}
+	f := newSerialFakeLLM(nil)
+	f.err = context.Canceled
 	pt := store.InterestPoint{ID: "ip1", AgentID: "a", Name: "X", Summary: "S",
 		Reliability: store.Reliability{Confidence: 0.8, Status: "supported"},
 		Freshness:   store.Freshness{Level: "fresh"}}
-	v := New(f, &fakeStore{}, nil, Config{})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
 	claims, err := v.CheckClaims(context.Background(), "a", []store.InterestPoint{pt})
 	if err != nil {
 		t.Fatal(err)
@@ -172,12 +355,12 @@ func TestCheckClaimsDegradesOnError(t *testing.T) {
 func TestFlagContradictions(t *testing.T) {
 	c1 := store.Claim{ID: "c1", Text: "MySQL is the best"}
 	c2 := store.Claim{ID: "c2", Text: "SQLite is the best"}
-	f := &fakeLLM{responses: []any{map[string]any{
+	f := newSerialFakeLLM([]any{map[string]any{
 		"contradictions": []map[string]any{
 			{"left_text": "MySQL is the best", "right_text": "SQLite is the best", "description": "two DBs both called best"},
 		},
-	}}}
-	v := New(f, &fakeStore{}, nil, Config{})
+	}})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
 	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +374,9 @@ func TestFlagContradictions(t *testing.T) {
 }
 
 func TestFlagContradictionsDegradesOnError(t *testing.T) {
-	f := &fakeLLM{err: context.DeadlineExceeded}
-	v := New(f, &fakeStore{}, nil, Config{})
+	f := newSerialFakeLLM(nil)
+	f.err = context.DeadlineExceeded
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
 	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{{ID: "c1", Text: "x"}, {ID: "c2", Text: "y"}})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +391,7 @@ func TestGradeForRecallInterestPoint(t *testing.T) {
 		Reliability: store.Reliability{Confidence: 0.7, Status: "supported"},
 		Freshness:   store.Freshness{Level: "aging"}}
 	st := &fakeStore{ip: ip}
-	v := New(&fakeLLM{}, st, nil, Config{})
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
 	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{
 		{ID: "ip1", AgentID: "a", Kind: "interest_point", Score: 0.8},
 	})
@@ -226,12 +410,29 @@ func TestGradeForRecallInterestPoint(t *testing.T) {
 	}
 }
 
+func TestGradeForRecallArchivedFiltered(t *testing.T) {
+	ip := &store.InterestPoint{ID: "ip1", AgentID: "a", Name: "Alpha", Status: "archived",
+		Reliability: store.Reliability{Confidence: 0.7, Status: "supported"},
+		Freshness:   store.Freshness{Level: "aging"}}
+	st := &fakeStore{ip: ip}
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{
+		{ID: "ip1", AgentID: "a", Kind: "interest_point", Score: 0.8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("graded = %d, want 0 (archived filtered)", len(got))
+	}
+}
+
 func TestGradeForRecallPage(t *testing.T) {
 	st := &fakeStore{page: &store.Page{ID: "pg1", Title: "Page", Claims: []store.Claim{
 		{Text: "a", Confidence: 0.4, Status: "contested", Freshness: store.Freshness{Level: "stale"}},
 		{Text: "b", Confidence: 0.9, Status: "supported", Freshness: store.Freshness{Level: "fresh"}},
 	}}}
-	v := New(&fakeLLM{}, st, nil, Config{})
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
 	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{{ID: "pg1", Kind: "wiki_page", Score: 0.7}})
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +445,7 @@ func TestGradeForRecallPage(t *testing.T) {
 func TestFeedbackWriteBumpsInterestPoint(t *testing.T) {
 	ip := &store.InterestPoint{ID: "ip1", AgentID: "a", Name: "Alpha", SeenCount: 3, Importance: 0.5}
 	st := &fakeStore{ip: ip}
-	v := New(&fakeLLM{}, st, nil, Config{})
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
 	err := v.FeedbackWrite(context.Background(), "a", []vec.Hit{
 		{ID: "ip1", Kind: "interest_point"},
 		{ID: "pg1", Kind: "wiki_page"}, // ignored
@@ -259,3 +460,29 @@ func TestFeedbackWriteBumpsInterestPoint(t *testing.T) {
 		t.Errorf("importance = %f, want 0.55", st.ip.Importance)
 	}
 }
+
+func TestVerifyCandidatesParallel(t *testing.T) {
+	// Many candidates, serial fake LLM (single-slot mutex) — proves
+	// VerifyCandidates converges with correct count and per-candidate status.
+	n := 12
+	resps := make([]any, n)
+	for i := range resps {
+		resps[i] = map[string]any{"status": "supported", "confidence": 0.8}
+	}
+	f := newSerialFakeLLM(resps)
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{MaxConcurrency: 4})
+	out, err := v.VerifyCandidates(context.Background(), "agent-a", cands(n))
+	if err != nil {
+		t.Fatalf("VerifyCandidates error: %v", err)
+	}
+	if len(out) != n {
+		t.Fatalf("verified = %d, want %d", len(out), n)
+	}
+	for i, o := range out {
+		if o.Reliability.Status != "supported" {
+			t.Errorf("candidate %d status = %s, want supported", i, o.Reliability.Status)
+		}
+	}
+}
+
+var _ = time.Now
