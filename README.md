@@ -1,0 +1,134 @@
+[English](README.en.md) | 中文
+
+# interest-memory — 兴趣点记忆服务
+
+独立 Go 记忆服务：会话末从对话中提取兴趣点，经核查/清洗后写入 wiki 双链知识库；会话开始 RAG 召回注入上下文。支撑 Hermes 等消费 agent 的长期记忆。
+
+## 核心特性
+
+- **前缀窗口并行提取** — 每 5 个 user 回合一个前缀窗口步长（少于 5 不切分），并行分发提取，命中 DeepSeek/SiliconFlow 前缀缓存
+- **三段式纠错** — 主观性豁免联网核查；新候选与最相似历史旧点关系裁决（supersede/update/delete → 归档/合并/新建）；证据定位（网页 URL / 会话轮次 / 检索 query）
+- **每兴趣点独立 agent loop 写入** — 单点 + 证据 + 对应对话片段；工具集 `wiki_query / wiki_tags / verify_claims / review / wiki_write`（联网审计 + 只读 review + tag 分类法）
+- **相关页协同** — 写入/归档变更后，≤3 跳图传播统一处理：级联归档（页标 superseded）、矛盾闭环、内容协同，超 10 页自动分批
+- **消费端查询** — `recall` 精简注入 + `memory_search`（完整内容 + 边关系）/ `memory_logs` 工具
+- **时间能力** — `session_date` 透传 → 事件时间 EventTime → recall 时间过滤（after/before/最近 N 天），支撑 LongMemEval temporal 评测
+- **完整审计** — change_log 记录每次结构化改动（标题 + 动作 + 结构性边）；tag 分类法（`ListTags` 聚合 + `wiki_tags` 工具）
+
+## 架构与数据流
+
+```
+会话末 POST /sessions（Hermes 推送转录，含 session_date）
+  → worker 串行（每 agent）
+  → fork      前缀窗口切分（每 5 user 回合）→ 并行侧 LLM 提取候选 + 去重
+  → verify#1  并行核查：主观性豁免联网 / 关系裁决 / 证据定位
+  → interest  按关系归档/合并/新增（EventTime/TurnRange 落库）
+  → verify#2  claims 提取 + 矛盾检测
+  → wiki      每兴趣点独立 agent loop 写页（verify_claims → review → wiki_write）
+  → RebuildEdges  双链重建
+  → reconcile 相关页协同（≤3 跳，级联/矛盾闭环/内容协同）
+
+会话开始 GET /recall?query=
+  → embed → vec 检索 → 时间过滤（after/before/days）→ 注入精简条目（含 (at 日期) 时间戳）
+
+消费端工具：memory_search（query/id + 完整内容 + 边）/ memory_logs（变更日志）
+```
+
+## 快速开始
+
+**前置**：Go 1.22+、CGO（sqlite-vec 静态链接）、DeepSeek + SiliconFlow API key。
+
+```bash
+# 1. 构建（单二进制）
+go build ./cmd/server
+
+# 2. 配置
+cp config.example.yaml config.yaml
+# 编辑 config.yaml：LLM（默认 DeepSeek）、embedding（默认 SiliconFlow BAAI/bge-m3）
+# 从环境变量提供密钥
+export DEEPSEEK_API_KEY=...     # LLM 核查/提取/写入
+export SILICONFLOW_API_KEY=...  # embedding（BAAI/bge-m3, 1024 维）
+
+# 3. 运行（默认 :8899）
+./server -config config.yaml
+
+# 4. 端到端测试（真实 LLM）
+bash scripts/e2e.sh
+```
+
+## REST API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v1/{agent}/sessions` | 会话末推转录（含可选 `session_date` RFC3339）→ 202 job_id |
+| GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | 召回注入（时间过滤可选） |
+| GET | `/api/v1/{agent}/search?query= 或 ?id=&top_k=` | 消费侧查询：完整内容 + 边关系 |
+| GET | `/api/v1/{agent}/logs?limit=&offset=` | 变更日志（倒序分页） |
+| GET | `/api/v1/{agent}/interest-points` | 兴趣点列表 |
+| GET | `/api/v1/{agent}/wiki/pages[?type=]` | wiki 页列表 |
+| POST | `/api/v1/{agent}/fork` | 手动触发分叉 |
+| GET | `/api/v1/{agent}/jobs/{id}` | 任务状态 |
+| GET | `/api/v1/{agent}/stats` | 统计 |
+| GET | `/api/health` | 健康检查 |
+
+## Hermes 接入
+
+部署插件到 Hermes 插件目录：
+
+```bash
+cp -r bridge/hermes $HERMES_HOME/plugins/interest/
+```
+
+配置 env：`INTEREST_BASE_URL`（默认 `http://127.0.0.1:8899`）、`INTEREST_AGENT`（agent 命名空间，默认 profile）、`INTEREST_TIMEOUT`。
+
+插件能力：会话开始 `prefetch` 召回注入、会话结束推转录（含 `session_date`）、消费端 `memory_search` / `memory_logs` 工具。
+
+## 配置参考
+
+见 `config.example.yaml`。核心段：
+
+- `server` — 监听地址 / 端口 / SQLite 路径
+- `llm` — 侧 LLM（提取/核查/写入），base_url/api_key_env/model 独立可配
+- `embedding` — 独立可配，默认 SiliconFlow `BAAI/bge-m3`（1024 维）
+- `fork` — 前缀窗口步长(5) / 上限(8) / 并行度(4) / 相似度阈值
+- `verify` — 联网核查开关 / search_max / web_tool / 并行度
+- `wiki` — 协同传播深度(3) / 分批(10)
+- `search` — 消费侧查询 top_k(3) / max_body_len(4000)
+- `log` — 变更日志保留条数（0=无限）
+- `recall` — top_k(8) / include_wiki / min_score(0.30)
+
+## 目录结构
+
+```
+cmd/server/          入口（-config 标志，装配 + 优雅关闭）
+internal/config/     YAML + env 覆盖配置
+internal/store/      SQLite（兴趣点/wiki 页/边/claims/转录/change_log）
+internal/vec/        sqlite-vec 向量索引（FTS 兜底）
+internal/llm/        OpenAI 兼容 Chat/Embedding
+internal/fork/       前缀窗口切分 + 并行候选提取
+internal/verify/     三段式纠错（核查/claims/矛盾/召回标注）
+internal/interest/   清洗（合并/关联/新增/归档）
+internal/wiki/       写入 agent loop（5 工具）+ 相关页协同
+internal/recall/     召回注入 + 结构化查询
+internal/service/    编排层
+internal/worker/     每 agent 串行队列
+internal/httpapi/    REST 端点
+internal/websearch/  可注册网络工具 registry
+bridge/hermes/       Hermes MemoryProvider 插件
+```
+
+## 测试
+
+```bash
+# Go 全量（含 race）
+CGO_ENABLED=1 go test -race ./...
+
+# Hermes 插件
+python3 bridge/hermes/test_interest.py
+
+# 端到端（需 DEEPSEEK_API_KEY + SILICONFLOW_API_KEY）
+bash scripts/e2e.sh
+```
+
+## 依赖
+
+`my-agent-core`（本地提炼库，`replace => ../my-agent-core`）、mattn/go-sqlite3（cgo 静态链接）、sqlite-vec、goldmark-obsidian（双链解析）。
