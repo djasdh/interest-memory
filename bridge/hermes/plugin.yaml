@@ -1,0 +1,8 @@
+name: interest
+version: 1.0.0
+description: "interest-memory — session-end interest point extraction + session-start RAG recall via a local Go memory service."
+pip_dependencies: []
+requires_env:
+  - INTEREST_BASE_URL
+hooks:
+  - on_session_end

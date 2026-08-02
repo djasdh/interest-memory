@@ -1,0 +1,19 @@
+# runtime state
+.quota_state.json
+
+# python
+__pycache__/
+*.pyc
+
+# sqlite runtime files
+*.db
+*.db-wal
+*.db-shm
+
+# env / secrets
+.env
+.env.*
+
+# local build artifacts
+bin/
+dist/

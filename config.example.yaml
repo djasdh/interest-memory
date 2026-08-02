@@ -1,0 +1,38 @@
+server:
+  host: 127.0.0.1
+  port: 8899
+  db_path: ~/.interest-memory/memory.db
+
+# 侧 LLM（分叉提取 / 纠错核查）——完全可配，base_url/key/model 独立于 embedding
+llm:
+  base_url: https://api.openai.com/v1
+  api_key_env: LLM_API_KEY      # 从环境变量取密钥
+  model: gpt-4o-mini
+  max_tokens: 4096
+
+# embedding —— 完全可配，独立于 llm。默认 SiliconFlow 免费模型 BAAI/bge-m3（固定 1024 维）
+embedding:
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: BAAI/bge-m3
+  dimensions: 1024
+
+# 分叉分析（会话末按窗口）
+fork:
+  window_turns: 10              # 固定轮数窗口
+  similarity_merge: 0.85        # 与历史兴趣点去重合并阈值
+  similarity_relate: 0.50       # 关联建边阈值
+  importance_boost_per_seen: 0.05  # 每次再见到时的 importance 增幅
+  max_candidates_per_window: 20
+  min_confidence: 0.3              # 候选兴趣点置信度下限（对齐 my-agent-core 0.3 阈值）
+
+# 纠错核查（verify#1）
+verify:
+  use_web_search: true           # 是否用 web_search 做事实核查（失败降级不阻断）
+  search_max: 5                  # 每个候选的最大搜索结果数
+
+# RAG 召回
+recall:
+  top_k: 8
+  include_wiki: true
+  min_score: 0.30
