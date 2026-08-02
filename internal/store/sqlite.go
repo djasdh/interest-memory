@@ -92,6 +92,8 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			importance REAL NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'active',
 			subjective INTEGER NOT NULL DEFAULT 0,
+			turn_range_start INTEGER NOT NULL DEFAULT 0,
+			turn_range_end INTEGER NOT NULL DEFAULT 0,
 			confidence REAL NOT NULL DEFAULT 0,
 			reliability_status TEXT NOT NULL DEFAULT 'unknown',
 			evidence TEXT NOT NULL DEFAULT '[]',
@@ -110,6 +112,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			page_type TEXT NOT NULL,
 			title TEXT NOT NULL,
 			body_md TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
 			created_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
 			PRIMARY KEY (id, agent_id)
@@ -163,9 +166,12 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 		}
 	}
 	_, _ = s.db.ExecContext(ctx, `INSERT OR REPLACE INTO schema_version (version) VALUES (1)`)
-	// Best-effort migration for existing databases created before the
-	// subjective column existed (duplicate-column errors are ignored).
+	// Best-effort migration for existing databases created before newer columns
+	// existed (duplicate-column errors are ignored).
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN subjective INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN turn_range_start INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN turn_range_end INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
 	return nil
 }
 

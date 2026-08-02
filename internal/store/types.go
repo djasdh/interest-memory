@@ -50,6 +50,7 @@ type InterestPoint struct {
 	Importance     float64     `json:"importance"`
 	Status         string      `json:"status"` // active | archived
 	Subjective     bool        `json:"subjective"` // 主观观点/偏好标记（豁免联网核查）
+	TurnRange      [2]int      `json:"turn_range"` // 来源会话全局轮次 [start,end]
 	Reliability    Reliability `json:"reliability"`
 	Freshness      Freshness   `json:"freshness"`
 	FirstSeenAt    time.Time   `json:"first_seen_at"`
@@ -75,6 +76,7 @@ type Page struct {
 	PageType  PageType  `json:"page_type"`
 	Title     string    `json:"title"`
 	BodyMD    string    `json:"body_md"` // markdown，含 [[wikilink]]
+	Status    string    `json:"status"` // active | superseded | archived（"" 视为 active）
 	Claims    []Claim   `json:"claims"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

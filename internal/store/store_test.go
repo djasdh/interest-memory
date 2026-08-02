@@ -51,6 +51,59 @@ func TestInterestPointSubjectiveAndEvidenceLocators(t *testing.T) {
 	}
 }
 
+func TestInterestPointTurnRangePersisted(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	p := InterestPoint{
+		ID: "ip-tr", AgentID: "a", Name: "点", Summary: "s",
+		Status:     "active",
+		TurnRange:  [2]int{3, 9},
+		Reliability: Reliability{Confidence: 0.8, Status: "supported"},
+		Freshness:  Freshness{Level: "fresh", UpdatedAt: now},
+	}
+	if err := s.UpsertInterestPoint(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := s.GetInterestPoint(ctx, "a", "ip-tr")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil || got.TurnRange != [2]int{3, 9} {
+		t.Errorf("turn_range = %v, want [3 9]", got.TurnRange)
+	}
+}
+
+func TestPageStatusPersisted(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	if err := s.UpsertPage(ctx, Page{ID: "pg-a", AgentID: "a", Title: "t", BodyMD: "b", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("UpsertPage: %v", err)
+	}
+	got, err := s.GetPage(ctx, "a", "pg-a")
+	if err != nil {
+		t.Fatalf("GetPage: %v", err)
+	}
+	if got == nil || got.Status != "active" {
+		t.Errorf("default status = %q, want active", got.Status)
+	}
+
+	got.Status = "superseded"
+	if err := s.UpsertPage(ctx, *got); err != nil {
+		t.Fatalf("UpsertPage superseded: %v", err)
+	}
+	got2, err := s.GetPage(ctx, "a", "pg-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.Status != "superseded" {
+		t.Errorf("status = %q, want superseded", got2.Status)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")
