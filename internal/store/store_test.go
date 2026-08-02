@@ -8,6 +8,49 @@ import (
 	"time"
 )
 
+func TestInterestPointSubjectiveAndEvidenceLocators(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	p := InterestPoint{
+		ID: "ip-sub", AgentID: "a", Name: "偏好", Summary: "喜欢 Go",
+		Status:     "active",
+		Subjective: true,
+		Reliability: Reliability{
+			Confidence: 0.9, Status: "supported",
+			Evidence: []Evidence{{
+				Kind: "web", SourceID: "u", URL: "https://x.example",
+				TurnRange: [2]int{2, 3}, Query: "go lang", CapturedAt: now, Excerpt: "e",
+			}},
+		},
+		Freshness: Freshness{Level: "fresh", UpdatedAt: now},
+	}
+	if err := s.UpsertInterestPoint(ctx, p); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := s.GetInterestPoint(ctx, "a", "ip-sub")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get returned nil")
+	}
+	if !got.Subjective {
+		t.Error("subjective not persisted (want true)")
+	}
+	ev := got.Reliability.Evidence
+	if len(ev) != 1 {
+		t.Fatalf("evidence = %d, want 1", len(ev))
+	}
+	if ev[0].URL != "https://x.example" || ev[0].Query != "go lang" || ev[0].TurnRange != [2]int{2, 3} {
+		t.Errorf("evidence locators = %+v", ev[0])
+	}
+	if ev[0].CapturedAt.IsZero() {
+		t.Error("captured_at is zero")
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

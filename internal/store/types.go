@@ -28,11 +28,16 @@ type Freshness struct {
 	TTLDays   int       `json:"ttl_days"`
 }
 
-// Evidence is one provenance record backing a claim.
+// Evidence is one provenance record backing a claim, locatable to source
+// (turn range in a session, or a web URL + the query that surfaced it).
 type Evidence struct {
-	Kind     string `json:"kind"`      // session | page | manual | web
-	SourceID string `json:"source_id"` // 追溯来源
-	Excerpt  string `json:"excerpt"`
+	Kind       string    `json:"kind"`                  // session | page | manual | web
+	SourceID   string    `json:"source_id"`             // 追溯来源：session_id / page_id / URL
+	URL        string    `json:"url,omitempty"`         // 网络证据原文 URL
+	TurnRange  [2]int    `json:"turn_range,omitempty"`  // 会话内起止轮（1-indexed，0 表示未知）
+	Query      string    `json:"query,omitempty"`       // 触发该证据检索的 query
+	CapturedAt time.Time `json:"captured_at,omitempty"` // 证据采集时间
+	Excerpt    string    `json:"excerpt"`
 }
 
 // InterestPoint is a first-class entity identified by fork analysis.
@@ -44,6 +49,7 @@ type InterestPoint struct {
 	Keywords       []string    `json:"keywords"`
 	Importance     float64     `json:"importance"`
 	Status         string      `json:"status"` // active | archived
+	Subjective     bool        `json:"subjective"` // 主观观点/偏好标记（豁免联网核查）
 	Reliability    Reliability `json:"reliability"`
 	Freshness      Freshness   `json:"freshness"`
 	FirstSeenAt    time.Time   `json:"first_seen_at"`

@@ -16,16 +16,17 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 	defer lock.Unlock()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO interest_points (
-			id, agent_id, name, summary, keywords, importance, status,
+			id, agent_id, name, summary, keywords, importance, status, subjective,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, agent_id) DO UPDATE SET
 			name = excluded.name,
 			summary = excluded.summary,
 			keywords = excluded.keywords,
 			importance = excluded.importance,
 			status = excluded.status,
+			subjective = excluded.subjective,
 			confidence = excluded.confidence,
 			reliability_status = excluded.reliability_status,
 			evidence = excluded.evidence,
@@ -36,6 +37,7 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 			seen_count = excluded.seen_count,
 			source_session_ids = excluded.source_session_ids`,
 		p.ID, p.AgentID, p.Name, p.Summary, marshalJSON(p.Keywords), p.Importance, p.Status,
+		boolInt(p.Subjective),
 		p.Reliability.Confidence, p.Reliability.Status, marshalJSON(p.Reliability.Evidence),
 		p.Freshness.Level, p.Freshness.UpdatedAt, p.Freshness.TTLDays,
 		p.FirstSeenAt, p.LastSeenAt, p.SeenCount, marshalJSON(p.SourceSessions),
@@ -48,7 +50,7 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 
 func (s *SQLiteStore) GetInterestPoint(ctx context.Context, agentID, id string) (*InterestPoint, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, agent_id, name, summary, keywords, importance, status,
+		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points WHERE id = ? AND agent_id = ?`, id, agentID)
@@ -64,7 +66,7 @@ func (s *SQLiteStore) GetInterestPoint(ctx context.Context, agentID, id string) 
 
 func (s *SQLiteStore) ListInterestPoints(ctx context.Context, agentID string) ([]InterestPoint, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, agent_id, name, summary, keywords, importance, status,
+		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points WHERE agent_id = ? ORDER BY importance DESC`, agentID)
@@ -89,7 +91,7 @@ func (s *SQLiteStore) SearchInterestPointsByKeywords(ctx context.Context, agentI
 	}
 	pattern := "%" + strings.ToLower(query) + "%"
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, agent_id, name, summary, keywords, importance, status,
+		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
 			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
 		FROM interest_points
@@ -117,8 +119,10 @@ type rowScanner interface {
 func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	var p InterestPoint
 	var keywords, evidence, sessions string
+	var subjective int
 	err := row.Scan(
 		&p.ID, &p.AgentID, &p.Name, &p.Summary, &keywords, &p.Importance, &p.Status,
+		&subjective,
 		&p.Reliability.Confidence, &p.Reliability.Status, &evidence, &p.Freshness.Level,
 		&p.Freshness.UpdatedAt, &p.Freshness.TTLDays, &p.FirstSeenAt, &p.LastSeenAt,
 		&p.SeenCount, &sessions,
@@ -129,6 +133,7 @@ func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	unmarshalJSON(keywords, &p.Keywords)
 	unmarshalJSON(evidence, &p.Reliability.Evidence)
 	unmarshalJSON(sessions, &p.SourceSessions)
+	p.Subjective = subjective != 0
 	return &p, nil
 }
 

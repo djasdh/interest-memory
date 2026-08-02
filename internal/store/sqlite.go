@@ -91,6 +91,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			keywords TEXT NOT NULL DEFAULT '[]',
 			importance REAL NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'active',
+			subjective INTEGER NOT NULL DEFAULT 0,
 			confidence REAL NOT NULL DEFAULT 0,
 			reliability_status TEXT NOT NULL DEFAULT 'unknown',
 			evidence TEXT NOT NULL DEFAULT '[]',
@@ -162,6 +163,9 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 		}
 	}
 	_, _ = s.db.ExecContext(ctx, `INSERT OR REPLACE INTO schema_version (version) VALUES (1)`)
+	// Best-effort migration for existing databases created before the
+	// subjective column existed (duplicate-column errors are ignored).
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN subjective INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -177,4 +181,12 @@ func marshalJSON(v any) string {
 
 func unmarshalJSON(data string, out any) {
 	_ = json.Unmarshal([]byte(data), out)
+}
+
+// boolInt converts a bool to SQLite INTEGER storage.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
