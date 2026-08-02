@@ -55,7 +55,9 @@ embedding:
   model: BAAI/bge-m3
   dimensions: 1024
 fork:
-  window_turns: 10
+  prefix_step: 5
+  max_windows: 8
+  max_concurrency: 4
   similarity_merge: 0.85
   similarity_relate: 0.50
   importance_boost_per_seen: 0.05
@@ -64,6 +66,8 @@ fork:
 verify:
   use_web_search: true
   search_max: 5
+  web_tool: myagent
+  max_concurrency: 4
 recall:
   top_k: 8
   include_wiki: true
