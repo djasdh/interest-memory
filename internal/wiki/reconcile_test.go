@@ -7,8 +7,8 @@ import (
 
 	"interest-memory/internal/store"
 
-	"my-agent-core/provider"
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/provider"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 func seedPages(t *testing.T, deps ToolsDeps, agentID string, pages map[string]string, edges [][3]string) {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"my-agent-core/types"
-	"my-agent-core/wiki"
+	"github.com/djasdh/my-agent-core/types"
+	"github.com/djasdh/my-agent-core/wiki"
 )
 
 // rawTurn is the Hermes wire format for a single transcript message:

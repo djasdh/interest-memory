@@ -9,9 +9,9 @@ import (
 	"interest-memory/internal/llm"
 	"interest-memory/internal/store"
 
-	"my-agent-core/agent"
-	"my-agent-core/provider"
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/agent"
+	"github.com/djasdh/my-agent-core/provider"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 // Compiler is the domain interface (design §七): write wiki pages from

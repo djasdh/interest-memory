@@ -6,11 +6,11 @@ import (
 	"interest-memory/internal/config"
 	"interest-memory/internal/websearch"
 
-	_ "my-agent-core/web_search/provider" // register the 12 search providers
+	_ "github.com/djasdh/my-agent-core/web_search/provider" // register the 12 search providers
 
-	"my-agent-core/provider"
-	"my-agent-core/types"
-	websearchcore "my-agent-core/web_search/core"
+	"github.com/djasdh/my-agent-core/provider"
+	"github.com/djasdh/my-agent-core/types"
+	websearchcore "github.com/djasdh/my-agent-core/web_search/core"
 )
 
 // myAgentWebTool adapts my-agent-core web_search into a registered websearch

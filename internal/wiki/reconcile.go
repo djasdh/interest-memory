@@ -7,7 +7,7 @@ import (
 
 	"interest-memory/internal/store"
 
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 // ReconcileInput lists what changed this pipeline run so the reconcile stage

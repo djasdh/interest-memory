@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 func TestToMessages(t *testing.T) {

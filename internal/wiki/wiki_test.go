@@ -12,7 +12,7 @@ import (
 	"interest-memory/internal/vec"
 	"interest-memory/internal/websearch"
 
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 func newTestDeps(t *testing.T) (ToolsDeps, *store.SQLiteStore, vec.VectorIndex) {

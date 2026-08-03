@@ -18,7 +18,7 @@ import (
 	"interest-memory/internal/vec"
 	"interest-memory/internal/worker"
 
-	"my-agent-core/gateway"
+	"github.com/djasdh/my-agent-core/gateway"
 )
 
 func main() {

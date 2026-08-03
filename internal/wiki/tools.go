@@ -14,7 +14,7 @@ import (
 	"interest-memory/internal/vec"
 	"interest-memory/internal/websearch"
 
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 type Embedder interface {

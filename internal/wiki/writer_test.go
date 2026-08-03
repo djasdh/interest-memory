@@ -8,8 +8,8 @@ import (
 
 	"interest-memory/internal/store"
 
-	"my-agent-core/provider"
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/provider"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 type fakeProviderFactory struct {

@@ -8,7 +8,7 @@ import (
 
 	"interest-memory/internal/llm"
 
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 // reviewSuggestion is one item in the review tool's output.

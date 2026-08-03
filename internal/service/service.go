@@ -17,8 +17,8 @@ import (
 	"interest-memory/internal/websearch"
 	"interest-memory/internal/wiki"
 
-	"my-agent-core/provider"
-	"my-agent-core/types"
+	"github.com/djasdh/my-agent-core/provider"
+	"github.com/djasdh/my-agent-core/types"
 )
 
 // Service orchestrates the full memory pipeline (design §五): it wires the
