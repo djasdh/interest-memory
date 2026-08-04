@@ -57,10 +57,13 @@ func (c WikiConfig) OutputLanguage() string {
 
 // VerifyConfig controls the correction layer (verify#1 fact-checking).
 type VerifyConfig struct {
-	UseWebSearch   bool   `yaml:"use_web_search"`
-	SearchMax      int    `yaml:"search_max"`
-	WebTool        string `yaml:"web_tool"`        // 网络工具名（registry 中 active）
-	MaxConcurrency int    `yaml:"max_concurrency"` // 候选核查并行度
+	UseWebSearch   bool    `yaml:"use_web_search"`
+	SearchMax      int     `yaml:"search_max"`
+	WebTool        string  `yaml:"web_tool"`        // 网络工具名（registry 中 active）
+	MaxConcurrency int     `yaml:"max_concurrency"` // 候选核查并行度
+	MinConfidence  float64 `yaml:"min_confidence"`  // 矛盾入库最低置信度（0~1；0=禁用，默认禁用）
+	SimThreshold   float64 `yaml:"sim_threshold"`   // 语义归组相似度阈值（同话题候选门槛，默认 0.45）
+	MaxCandidates  int     `yaml:"max_candidates"`  // 语义归组每窗口候选对上限（默认 30）
 }
 
 type ServerConfig struct {
@@ -135,6 +138,9 @@ func Default() Config {
 			SearchMax:      5,
 			WebTool:        "myagent",
 			MaxConcurrency: 4,
+			MinConfidence:  0,
+			SimThreshold:   0.45,
+			MaxCandidates:  30,
 		},
 		Wiki: WikiConfig{
 			MaxHops:   3,

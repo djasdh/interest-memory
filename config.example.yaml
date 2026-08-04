@@ -34,11 +34,15 @@ verify:
   search_max: 5                  # 每个候选的最大搜索结果数
   web_tool: myagent              # 网络工具名（registry 中 active；默认 myagent=my-agent-core 12 provider）
   max_concurrency: 4             # 候选核查并行度
+  min_confidence: 0              # 矛盾入库最低置信度（0~1；0=禁用，默认禁用）
+  sim_threshold: 0.45            # 语义归组相似度阈值（同话题候选门槛）
+  max_candidates: 30             # 语义归组每窗口候选对上限（超出按相似度降序截断）
 
 # wiki 写入与相关页协同
 wiki:
   max_hops: 3                    # 协同图传播深度（至多 3 跳）
   batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）
+  language: 中文                  # 页面输出语言（默认中文）
 
 # RAG 召回
 recall:

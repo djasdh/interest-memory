@@ -53,6 +53,9 @@ func New(
 		LLM:            cfg.LLM,
 		MaxConcurrency: cfg.Verify.MaxConcurrency,
 		Language:       cfg.Wiki.OutputLanguage(),
+		MinConfidence:  cfg.Verify.MinConfidence,
+		SimThreshold:   cfg.Verify.SimThreshold,
+		MaxCandidates:  cfg.Verify.MaxCandidates,
 	})
 
 	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder, Search: reg, LLM: llmClient}

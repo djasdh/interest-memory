@@ -68,6 +68,9 @@ verify:
   search_max: 5
   web_tool: myagent
   max_concurrency: 4
+  min_confidence: 0
+  sim_threshold: 0.45
+  max_candidates: 30
 wiki:
   max_hops: 3
   batch_size: 10

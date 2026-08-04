@@ -47,6 +47,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Verify.MaxConcurrency != 4 {
 		t.Errorf("default verify max_concurrency = %d, want 4", cfg.Verify.MaxConcurrency)
 	}
+	if cfg.Verify.MinConfidence != 0 {
+		t.Errorf("default verify min_confidence = %f, want 0 (disabled)", cfg.Verify.MinConfidence)
+	}
+	if cfg.Verify.SimThreshold != 0.45 {
+		t.Errorf("default verify sim_threshold = %f, want 0.45", cfg.Verify.SimThreshold)
+	}
+	if cfg.Verify.MaxCandidates != 30 {
+		t.Errorf("default verify max_candidates = %d, want 30", cfg.Verify.MaxCandidates)
+	}
 	if cfg.Wiki.MaxHops != 3 || cfg.Wiki.BatchSize != 10 {
 		t.Errorf("default wiki = %+v, want MaxHops=3 BatchSize=10", cfg.Wiki)
 	}
@@ -68,6 +77,10 @@ server:
 fork:
   prefix_step: 5
   similarity_merge: 0.9
+verify:
+  sim_threshold: 0.7
+  max_candidates: 15
+  min_confidence: 0.6
 `
 	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -87,6 +100,15 @@ fork:
 	}
 	if cfg.Fork.SimilarityMerge != 0.9 {
 		t.Errorf("similarity_merge = %f, want 0.9", cfg.Fork.SimilarityMerge)
+	}
+	if cfg.Verify.SimThreshold != 0.7 {
+		t.Errorf("sim_threshold = %f, want 0.7", cfg.Verify.SimThreshold)
+	}
+	if cfg.Verify.MaxCandidates != 15 {
+		t.Errorf("max_candidates = %d, want 15", cfg.Verify.MaxCandidates)
+	}
+	if cfg.Verify.MinConfidence != 0.6 {
+		t.Errorf("min_confidence = %f, want 0.6", cfg.Verify.MinConfidence)
 	}
 	// Unset keys keep defaults
 	if cfg.Recall.TopK != 8 {
