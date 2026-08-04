@@ -131,4 +131,4 @@ bash scripts/e2e.sh
 
 ## Dependencies
 
-`my-agent-core` (local extracted library, `replace => ../my-agent-core`), mattn/go-sqlite3 (cgo static link), sqlite-vec, goldmark-obsidian (wikilink parsing).
+`my-agent-core` (`github.com/djasdh/my-agent-core v0.1.0`), mattn/go-sqlite3 (cgo static link), sqlite-vec, goldmark-obsidian (wikilink parsing).

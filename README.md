@@ -131,4 +131,4 @@ bash scripts/e2e.sh
 
 ## 依赖
 
-`my-agent-core`（本地提炼库，`replace => ../my-agent-core`）、mattn/go-sqlite3（cgo 静态链接）、sqlite-vec、goldmark-obsidian（双链解析）。
+`my-agent-core`（`github.com/djasdh/my-agent-core v0.1.0`）、mattn/go-sqlite3（cgo 静态链接）、sqlite-vec、goldmark-obsidian（双链解析）。
