@@ -3,6 +3,8 @@ package verify
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,8 @@ type fakeLLM struct {
 	idx       int
 	err       error
 	mu        chan struct{}
+	prompts   []string
+	pmu       sync.Mutex
 }
 
 func (f *fakeLLM) next() []byte {
@@ -41,7 +45,27 @@ func (f *fakeLLM) ChatJSON(_ context.Context, msgs []llm.Message, out any) error
 	if f.err != nil {
 		return f.err
 	}
+	if len(msgs) > 0 {
+		f.pmu.Lock()
+		f.prompts = append(f.prompts, msgs[0].Content)
+		f.pmu.Unlock()
+	}
 	return json.Unmarshal(f.next(), out)
+}
+
+func (f *fakeLLM) callCount() int {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	return len(f.prompts)
+}
+
+func (f *fakeLLM) lastPrompt() string {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	if len(f.prompts) == 0 {
+		return ""
+	}
+	return f.prompts[len(f.prompts)-1]
 }
 
 func newSerialFakeLLM(responses []any) *fakeLLM {
@@ -77,9 +101,10 @@ func (f *fakeRetriever) Search(_ context.Context, _ string, _ []float32, _ int) 
 }
 
 type fakeEmbedder struct {
-	v     []float32
-	err   error
-	calls int
+	v       []float32
+	err     error
+	calls   int
+	batchFn func([]string) [][]float32
 }
 
 func (f *fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
@@ -91,6 +116,21 @@ func (f *fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 		return make([]float32, 8), nil
 	}
 	return f.v, nil
+}
+
+func (f *fakeEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.batchFn != nil {
+		return f.batchFn(texts), nil
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, 8)
+	}
+	return out, nil
 }
 
 type fakeStore struct {
@@ -386,6 +426,193 @@ func TestFlagContradictionsDegradesOnError(t *testing.T) {
 	}
 }
 
+func TestFlagContradictionsFalse(t *testing.T) {
+	c1 := store.Claim{ID: "c1", Text: "MySQL is the best"}
+	c2 := store.Claim{ID: "c2", Text: "SQLite is the best"}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "MySQL is the best", "right_text": "SQLite is the best", "description": "both claim best", "is_contradiction": false, "confidence": 0.9},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons) != 0 {
+		t.Fatalf("contradictions = %d, want 0 (is_contradiction=false)", len(cons))
+	}
+}
+
+func TestFlagContradictionsMissingField(t *testing.T) {
+	// Legacy model omitting is_contradiction must still be accepted (defaults
+	// to true) instead of silently zeroing recall.
+	c1 := store.Claim{ID: "c1", Text: "A"}
+	c2 := store.Claim{ID: "c2", Text: "B"}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "A", "right_text": "B", "description": "conflict"},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons) != 1 {
+		t.Fatalf("contradictions = %d, want 1 (missing field defaults to true)", len(cons))
+	}
+}
+
+func TestFlagContradictionsNegativeDesc(t *testing.T) {
+	// LLM marks true but describes the pair as a denial → B overrides to skip.
+	c1 := store.Claim{ID: "c1", Text: "A"}
+	c2 := store.Claim{ID: "c2", Text: "B"}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "A", "right_text": "B", "description": "not a contradiction, they are consistent", "is_contradiction": true, "confidence": 0.9},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons) != 0 {
+		t.Fatalf("contradictions = %d, want 0 (negative description)", len(cons))
+	}
+}
+
+func TestFlagContradictionsNoFalseDrop(t *testing.T) {
+	// Negation forms of the weak words (不一致 / inconsistent) describe real
+	// conflict and must not be dropped by the denial filter.
+	for _, tc := range []struct {
+		name     string
+		desc     string
+		wantCons int
+	}{
+		{"chinese_inconsistent", "这两个声明不一致", 1},
+		{"english_inconsistent", "the claims are inconsistent", 1},
+		{"denial", "they are not contradictory", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSerialFakeLLM([]any{map[string]any{
+				"contradictions": []map[string]any{
+					{"left_text": "A", "right_text": "B", "description": tc.desc, "is_contradiction": true, "confidence": 0.9},
+				},
+			}})
+			v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+			cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{{ID: "c1", Text: "A"}, {ID: "c2", Text: "B"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cons) != tc.wantCons {
+				t.Fatalf("contradictions = %d, want %d", len(cons), tc.wantCons)
+			}
+		})
+	}
+}
+
+func TestFlagContradictionsConfidenceThreshold(t *testing.T) {
+	c1 := store.Claim{ID: "c1", Text: "A"}
+	c2 := store.Claim{ID: "c2", Text: "B"}
+	resp := func() map[string]any {
+		return map[string]any{
+			"contradictions": []map[string]any{
+				{"left_text": "A", "right_text": "B", "description": "conflict", "is_contradiction": true, "confidence": 0.4},
+			},
+		}
+	}
+	// Configured threshold: below it is dropped.
+	f := newSerialFakeLLM([]any{resp()})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{MinConfidence: 0.6})
+	cons, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons) != 0 {
+		t.Fatalf("contradictions = %d, want 0 (below threshold)", len(cons))
+	}
+	// Default (no threshold): accepted.
+	f2 := newSerialFakeLLM([]any{resp()})
+	v2 := New(f2, &fakeStore{}, nil, nil, nil, Config{})
+	cons2, err := v2.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons2) != 1 {
+		t.Fatalf("contradictions = %d, want 1 (no threshold configured)", len(cons2))
+	}
+}
+
+func TestFlagContradictionsCanonicalID(t *testing.T) {
+	c1 := store.Claim{ID: "aaa", Text: "A"}
+	c2 := store.Claim{ID: "zzz", Text: "B"}
+	fwd := map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "A", "right_text": "B", "description": "conflict", "is_contradiction": true},
+		},
+	}
+	rev := map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "B", "right_text": "A", "description": "conflict", "is_contradiction": true},
+		},
+	}
+	f := newSerialFakeLLM([]any{fwd, rev})
+	v := New(f, &fakeStore{}, nil, nil, nil, Config{})
+	cons1, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cons2, err := v.FlagContradictions(context.Background(), "a", []store.Claim{c1, c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons1) != 1 || len(cons2) != 1 {
+		t.Fatalf("contradictions = %d/%d, want 1/1", len(cons1), len(cons2))
+	}
+	if cons1[0].ID != cons2[0].ID {
+		t.Errorf("reversed pair ids differ: %q vs %q", cons1[0].ID, cons2[0].ID)
+	}
+	if cons1[0].LeftID != "aaa" || cons1[0].RightID != "zzz" {
+		t.Errorf("forward left/right not preserved: %+v", cons1[0])
+	}
+	if cons2[0].LeftID != "zzz" || cons2[0].RightID != "aaa" {
+		t.Errorf("reversed left/right not preserved: %+v", cons2[0])
+	}
+}
+
+func TestBuildContradictionPromptLanguage(t *testing.T) {
+	zh := (&service{cfg: Config{Language: "中文"}}).buildContradictionPrompt([]store.Claim{{ID: "c1", Text: "x"}})
+	if !strings.Contains(zh, "矛盾") {
+		t.Errorf("Chinese prompt missing 矛盾:\n%s", zh)
+	}
+	if !strings.Contains(zh, "is_contradiction") {
+		t.Errorf("prompt missing is_contradiction field:\n%s", zh)
+	}
+	en := (&service{cfg: Config{Language: "English"}}).buildContradictionPrompt([]store.Claim{{ID: "c1", Text: "x"}})
+	if !strings.Contains(en, "contradict") {
+		t.Errorf("English prompt missing contradict:\n%s", en)
+	}
+}
+
+func TestFindClaimUniquePrefix(t *testing.T) {
+	claims := []store.Claim{
+		{ID: "a", Text: "PostgreSQL is the best database"},
+		{ID: "b", Text: "PostgreSQL is the best open-source database"},
+	}
+	if got := findClaim(claims, "PostgreSQL is the best"); got != nil {
+		t.Errorf("ambiguous prefix matched %q, want nil", got.ID)
+	}
+	if got := findClaim(claims, "PostgreSQL is the best database"); got == nil || got.ID != "a" {
+		t.Errorf("exact match failed: %+v", got)
+	}
+	claims2 := []store.Claim{{ID: "x", Text: "Go is compiled"}, {ID: "y", Text: "Rust is safe"}}
+	if got := findClaim(claims2, "Go is comp"); got == nil || got.ID != "x" {
+		t.Errorf("single prefix match failed: %+v", got)
+	}
+}
+
 func TestGradeForRecallInterestPoint(t *testing.T) {
 	ip := &store.InterestPoint{ID: "ip1", AgentID: "a", Name: "Alpha",
 		Reliability: store.Reliability{Confidence: 0.7, Status: "supported"},
@@ -496,6 +723,188 @@ func TestVerifyCandidatesParallel(t *testing.T) {
 		if o.Reliability.Status != "supported" {
 			t.Errorf("candidate %d status = %s, want supported", i, o.Reliability.Status)
 		}
+	}
+}
+
+// topicEmbedder returns 2-D one-hot vectors: claims containing "topicA" get
+// [1,0], anything else [0,1]. Pairs within a topic have cosine 1, cross-topic
+// pairs 0 — a deterministic stand-in for real embeddings.
+func topicEmbedder() *fakeEmbedder {
+	return &fakeEmbedder{batchFn: func(texts []string) [][]float32 {
+		out := make([][]float32, len(texts))
+		for i, t := range texts {
+			if strings.Contains(t, "topicA") {
+				out[i] = []float32{1, 0}
+			} else {
+				out[i] = []float32{0, 1}
+			}
+		}
+		return out
+	}}
+}
+
+func TestFlagContradictionsSemanticGrouping(t *testing.T) {
+	claims := []store.Claim{
+		{ID: "c0", Text: "topicA claim one"},
+		{ID: "c1", Text: "topicA claim two"},
+		{ID: "c2", Text: "topicA claim three"},
+		{ID: "c3", Text: "topicB claim one"},
+		{ID: "c4", Text: "topicB claim two"},
+	}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "topicA claim one", "right_text": "topicA claim two", "description": "conflict", "is_contradiction": true, "confidence": 0.9},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, topicEmbedder(), Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.callCount() != 1 {
+		t.Fatalf("llm calls = %d, want 1", f.callCount())
+	}
+	// The prompt must list only same-topic candidate pairs with full texts.
+	p := f.lastPrompt()
+	if !strings.Contains(p, `"topicA claim one" ↔ "topicA claim two"`) {
+		t.Errorf("prompt missing same-topic candidate pair:\n%s", p)
+	}
+	if strings.Contains(p, `"topicB claim one"`) && strings.Contains(p, `"topicA claim one" ↔ "topicB claim one"`) {
+		t.Errorf("prompt contains cross-topic candidate pair:\n%s", p)
+	}
+	if len(cons) != 1 {
+		t.Fatalf("contradictions = %d, want 1", len(cons))
+	}
+	if cons[0].LeftID != "c0" || cons[0].RightID != "c1" {
+		t.Errorf("contradiction = %+v", cons[0])
+	}
+}
+
+func TestFlagContradictionsSemanticGroupingRejectsOutOfSet(t *testing.T) {
+	claims := []store.Claim{
+		{ID: "c0", Text: "topicA claim one"},
+		{ID: "c1", Text: "topicA claim two"},
+		{ID: "c3", Text: "topicB claim one"},
+	}
+	// The LLM returns a pair that never passed the embedding pre-filter.
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "topicA claim one", "right_text": "topicB claim one", "description": "conflict", "is_contradiction": true, "confidence": 0.9},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, topicEmbedder(), Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons) != 0 {
+		t.Fatalf("contradictions = %d, want 0 (pair outside candidate set)", len(cons))
+	}
+}
+
+func TestFlagContradictionsSemanticGroupingEmpty(t *testing.T) {
+	// Every claim is its own orthogonal topic → no candidate pairs → the LLM
+	// is never called (vs the full scan which always calls once per window).
+	claims := []store.Claim{
+		{ID: "c0", Text: "topicA claim one"},
+		{ID: "c1", Text: "topicB claim one"},
+		{ID: "c2", Text: "topicC claim one"},
+		{ID: "c3", Text: "topicD claim one"},
+	}
+	emb := &fakeEmbedder{batchFn: func(texts []string) [][]float32 {
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			vec := make([]float32, 4)
+			vec[i] = 1
+			out[i] = vec
+		}
+		return out
+	}}
+	f := newSerialFakeLLM(nil)
+	v := New(f, &fakeStore{}, nil, nil, emb, Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.callCount() != 0 {
+		t.Fatalf("llm calls = %d, want 0 (no candidates)", f.callCount())
+	}
+	if len(cons) != 0 {
+		t.Fatalf("contradictions = %d, want 0", len(cons))
+	}
+}
+
+func TestFlagContradictionsSemanticGroupingDegrades(t *testing.T) {
+	// EmbedBatch error → fall back to the full-scan prompt; contradictions
+	// are still detected.
+	emb := &fakeEmbedder{err: context.DeadlineExceeded}
+	claims := []store.Claim{{ID: "c0", Text: "A is best"}, {ID: "c1", Text: "B is best"}}
+	f := newSerialFakeLLM([]any{map[string]any{
+		"contradictions": []map[string]any{
+			{"left_text": "A is best", "right_text": "B is best", "description": "conflict", "is_contradiction": true, "confidence": 0.9},
+		},
+	}})
+	v := New(f, &fakeStore{}, nil, nil, emb, Config{})
+	cons, err := v.FlagContradictions(context.Background(), "a", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.callCount() != 1 {
+		t.Fatalf("llm calls = %d, want 1 (degraded to full scan)", f.callCount())
+	}
+	p := f.lastPrompt()
+	if !strings.Contains(p, "Below are claims") && !strings.Contains(p, "下面是记忆 wiki") {
+		t.Errorf("degraded prompt does not look like the full scan:\n%s", p)
+	}
+	if len(cons) != 1 {
+		t.Fatalf("contradictions = %d, want 1", len(cons))
+	}
+}
+
+func TestSemanticCandidatesThresholdAndCap(t *testing.T) {
+	group := []store.Claim{
+		{ID: "a1", Text: "topicA claim one"},
+		{ID: "a2", Text: "topicA claim two"},
+		{ID: "a3", Text: "topicA claim three"},
+		{ID: "a4", Text: "topicA claim four"},
+		{ID: "a5", Text: "topicA claim five"},
+		{ID: "b1", Text: "topicB claim one"},
+		{ID: "b2", Text: "topicB claim two"},
+		{ID: "b3", Text: "topicB claim three"},
+	}
+	s := &service{embed: topicEmbedder(), cfg: Config{SimThreshold: 0.45, MaxCandidates: 5}}
+	cands, err := s.semanticCandidates(context.Background(), group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A-internal C(5,2)=10 + B-internal C(3,2)=3 = 13 pairs, capped at 5.
+	if len(cands) != 5 {
+		t.Fatalf("candidates = %d, want 5 (capped)", len(cands))
+	}
+	// All retained pairs are A-internal (indices 0..4) and sorted desc.
+	for _, c := range cands {
+		if c.i >= 5 || c.j >= 5 {
+			t.Errorf("cross-topic pair retained: %+v", c)
+		}
+		if c.sim != 1 {
+			t.Errorf("pair sim = %f, want 1", c.sim)
+		}
+	}
+}
+
+func TestBuildCandidatePromptLanguage(t *testing.T) {
+	group := []store.Claim{{ID: "c0", Text: "A is best"}, {ID: "c1", Text: "B is best"}}
+	cands := []candidatePair{{i: 0, j: 1, sim: 0.9}}
+	zh := (&service{cfg: Config{Language: "中文"}}).buildCandidatePrompt(group, cands)
+	if !strings.Contains(zh, "候选对") {
+		t.Errorf("Chinese prompt missing 候选对:\n%s", zh)
+	}
+	if !strings.Contains(zh, `"A is best" ↔ "B is best"`) {
+		t.Errorf("prompt missing candidate pair text:\n%s", zh)
+	}
+	en := (&service{cfg: Config{Language: "English"}}).buildCandidatePrompt(group, cands)
+	if !strings.Contains(en, "pre-filtered candidate pairs") {
+		t.Errorf("English prompt missing candidate section:\n%s", en)
 	}
 }
 

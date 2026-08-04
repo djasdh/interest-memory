@@ -52,6 +52,7 @@ func New(
 		WebTool:        cfg.Verify.WebTool,
 		LLM:            cfg.LLM,
 		MaxConcurrency: cfg.Verify.MaxConcurrency,
+		Language:       cfg.Wiki.OutputLanguage(),
 	})
 
 	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder, Search: reg, LLM: llmClient}

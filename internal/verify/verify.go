@@ -22,9 +22,11 @@ type LLM interface {
 }
 
 // Embedder computes the embedding used to recall the most similar historical
-// interest point (implemented by *llm.Embedder).
+// interest point (implemented by *llm.Embedder). EmbedBatch is used by
+// FlagContradictions to semantically group claims before asking the LLM.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 // Retriever recalls historical interest points by vector (implemented by
@@ -85,6 +87,18 @@ type Config struct {
 	WebTool        string
 	LLM            config.LLMConfig
 	MaxConcurrency int
+	// Language is the output language for the contradiction-detection prompt
+	// (defaults to "中文" when empty). JSON field names stay English.
+	Language string
+	// MinConfidence is the floor for contradiction confidence (0~1); pairs
+	// below it are dropped. <=0 disables the filter (default).
+	MinConfidence float64
+	// SimThreshold is the minimum embedding cosine similarity for a claim pair
+	// to be considered same-topic candidates for the LLM. <=0 defaults to 0.45.
+	SimThreshold float64
+	// MaxCandidates bounds how many candidate pairs are submitted to the LLM
+	// per window, keeping the top-most similar. <=0 defaults to 30.
+	MaxCandidates int
 }
 
 // Verifier is the domain interface (design §六/§七): 三段式纠错 + 闭环。
@@ -121,6 +135,15 @@ func New(llm LLM, st PointStore, search websearch.Searcher, ri Retriever, emb Em
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 4
+	}
+	if cfg.Language == "" {
+		cfg.Language = "中文"
+	}
+	if cfg.SimThreshold <= 0 {
+		cfg.SimThreshold = 0.45
+	}
+	if cfg.MaxCandidates <= 0 {
+		cfg.MaxCandidates = 30
 	}
 	return &service{llm: llm, store: st, search: search, vec: ri, embed: emb, cfg: cfg}
 }
