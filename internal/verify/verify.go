@@ -42,6 +42,9 @@ type PointStore interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error)
 	UpsertInterestPoint(ctx context.Context, p store.InterestPoint) error
 	GetPage(ctx context.Context, agentID, id string) (*store.Page, error)
+	// ResolveReplacement returns the live successor of an archived/superseded
+	// entity (or nil) so grading can silently substitute it.
+	ResolveReplacement(ctx context.Context, agentID, id string) (*store.Replacement, error)
 }
 
 // Relation is how a new candidate relates to its most similar historical

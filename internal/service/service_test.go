@@ -7,10 +7,14 @@ import (
 
 	"interest-memory/internal/config"
 	"interest-memory/internal/fork"
+	"interest-memory/internal/llm"
 	"interest-memory/internal/recall"
 	"interest-memory/internal/store"
 	"interest-memory/internal/vec"
 	"interest-memory/internal/verify"
+	"interest-memory/internal/wiki"
+
+	"github.com/djasdh/my-agent-core/types"
 )
 
 // fakeRecall implements recall.RecallService for passthrough tests.
@@ -243,5 +247,92 @@ func TestForkManualReturnsOldestUnprocessed(t *testing.T) {
 	}
 	if tx != nil {
 		t.Fatalf("expected nil when nothing unprocessed, got %+v", tx)
+	}
+}
+
+// ---- fake pipeline stages for ProcessSession tests ----
+
+type fakeFork struct{ cands []fork.Candidate }
+
+func (f *fakeFork) Analyze(context.Context, string, [][]llm.Message) ([]fork.Candidate, error) {
+	return f.cands, nil
+}
+
+type fakeCleaner struct {
+	pts      []store.InterestPoint
+	archived []string
+	calls    int
+}
+
+func (f *fakeCleaner) Clean(context.Context, string, []verify.Verified) ([]store.InterestPoint, []string, error) {
+	f.calls++
+	return f.pts, f.archived, nil
+}
+
+type fakeWiki struct {
+	touched    []string
+	reconciles []wiki.ReconcileInput
+}
+
+func (f *fakeWiki) Compile(context.Context, string, []store.InterestPoint, []types.Message) ([]string, error) {
+	return f.touched, nil
+}
+func (f *fakeWiki) RebuildEdges(context.Context, string) error { return nil }
+func (f *fakeWiki) ReconcileRelated(_ context.Context, _ string, in wiki.ReconcileInput, _, _ int) error {
+	f.reconciles = append(f.reconciles, in)
+	return nil
+}
+
+// fakeDeleteVerifier reuses fakeVerifier but returns a delete-relation
+// verified candidate so the pipeline archives without creating points.
+type fakeDeleteVerifier struct{ fakeVerifier }
+
+func (f *fakeDeleteVerifier) VerifyCandidates(context.Context, string, []fork.Candidate) ([]verify.Verified, error) {
+	return []verify.Verified{{
+		Candidate:    fork.Candidate{Topic: "old-topic"},
+		Relation:     verify.RelationDelete,
+		RelationToID: "ip-old",
+	}}, nil
+}
+
+func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
+	svc := &Service{
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
+		verify:   &fakeDeleteVerifier{},
+		interest: &fakeCleaner{pts: nil, archived: []string{"ip-old"}},
+		wiki:     &fakeWiki{},
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	fw := svc.wiki.(*fakeWiki)
+	if len(fw.reconciles) == 0 {
+		t.Fatal("ReconcileRelated was never called for a delete-only session")
+	}
+	got := fw.reconciles[len(fw.reconciles)-1]
+	if len(got.ArchivedPoints) != 1 || got.ArchivedPoints[0] != "ip-old" {
+		t.Errorf("archived points = %+v, want [ip-old]", got.ArchivedPoints)
+	}
+}
+
+func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
+	svc := &Service{
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
+		verify:   &fakeVerifier{},
+		interest: &fakeCleaner{pts: nil, archived: nil},
+		wiki:     &fakeWiki{},
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	fw := svc.wiki.(*fakeWiki)
+	if len(fw.reconciles) != 0 {
+		t.Errorf("reconcile called for no-op run: %+v", fw.reconciles)
 	}
 }

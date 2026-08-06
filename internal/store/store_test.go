@@ -338,6 +338,86 @@ func TestEventTimeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestResolveReplacementWalksSequelChain(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Chain: ip-old(archived) --sequel--> ip-new(active)
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-old", AgentID: "a", Name: "旧", Status: "archived"})
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-new", AgentID: "a", Name: "新", Status: "active"})
+	// ip-new has a concept page.
+	s.UpsertPage(ctx, Page{ID: "pg-new", AgentID: "a", Title: "新页", Status: "active", CreatedAt: now, UpdatedAt: now})
+	s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-old", TargetID: "ip-new", Kind: EdgeSequel, Weight: 1})
+	s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-new", TargetID: "pg-new", Kind: EdgeHasPage, Weight: 1})
+
+	rep, err := s.ResolveReplacement(ctx, "a", "ip-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil {
+		t.Fatal("no replacement resolved")
+	}
+	if rep.InterestPointID != "ip-new" {
+		t.Errorf("replacement ip = %q, want ip-new", rep.InterestPointID)
+	}
+	if rep.Page == nil || rep.Page.ID != "pg-new" {
+		t.Errorf("replacement page = %+v, want pg-new", rep.Page)
+	}
+}
+
+func TestResolveReplacementPageIDResolvesViaHasPage(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Old point archived, its concept page old-page, sequel to a live point
+	// with its own page.
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-old", AgentID: "a", Name: "旧", Status: "archived"})
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-new", AgentID: "a", Name: "新", Status: "active"})
+	s.UpsertPage(ctx, Page{ID: "pg-old", AgentID: "a", Title: "旧页", Status: "superseded", CreatedAt: now, UpdatedAt: now})
+	s.UpsertPage(ctx, Page{ID: "pg-new", AgentID: "a", Title: "新页", Status: "active", CreatedAt: now, UpdatedAt: now})
+	s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-old", TargetID: "pg-old", Kind: EdgeHasPage, Weight: 1})
+	s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-old", TargetID: "ip-new", Kind: EdgeSequel, Weight: 1})
+	s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-new", TargetID: "pg-new", Kind: EdgeHasPage, Weight: 1})
+
+	rep, err := s.ResolveReplacement(ctx, "a", "pg-old") // query by page id
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil || rep.Page == nil || rep.Page.ID != "pg-new" {
+		t.Errorf("replacement from page id = %+v, want pg-new", rep)
+	}
+}
+
+func TestResolveReplacementNoneForActive(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-active", AgentID: "a", Name: "活跃", Status: "active"})
+
+	rep, err := s.ResolveReplacement(ctx, "a", "ip-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep != nil {
+		t.Errorf("active entity should have no replacement, got %+v", rep)
+	}
+}
+
+func TestResolveReplacementNoneWhenNoSequel(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-del", AgentID: "a", Name: "已删", Status: "archived"})
+
+	rep, err := s.ResolveReplacement(ctx, "a", "ip-del")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep != nil {
+		t.Errorf("deleted entity should have no replacement, got %+v", rep)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

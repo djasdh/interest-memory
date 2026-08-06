@@ -148,6 +148,9 @@ func (f *fakeStore) UpsertInterestPoint(_ context.Context, p store.InterestPoint
 func (f *fakeStore) GetPage(_ context.Context, _, _ string) (*store.Page, error) {
 	return f.page, nil
 }
+func (f *fakeStore) ResolveReplacement(context.Context, string, string) (*store.Replacement, error) {
+	return nil, nil
+}
 
 func cands(n int) []fork.Candidate {
 	out := make([]fork.Candidate, n)
@@ -665,6 +668,86 @@ func TestGradeForRecallSupersededPageFiltered(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("graded = %d, want 0 (superseded page filtered)", len(got))
+	}
+}
+
+// fakeSubStore extends fakeStore with a configurable replacement so grading
+// can exercise silent substitution of superseded entities.
+type fakeSubStore struct {
+	ip       *store.InterestPoint
+	page     *store.Page
+	replPage *store.Page
+	replIP   *store.InterestPoint
+}
+
+func (f *fakeSubStore) GetInterestPoint(_ context.Context, _, id string) (*store.InterestPoint, error) {
+	if id == f.replIP.ID {
+		return f.replIP, nil
+	}
+	return f.ip, nil
+}
+func (f *fakeSubStore) UpsertInterestPoint(_ context.Context, p store.InterestPoint) error {
+	f.ip = &p
+	return nil
+}
+func (f *fakeSubStore) GetPage(_ context.Context, _, id string) (*store.Page, error) {
+	if f.replPage != nil && id == f.replPage.ID {
+		return f.replPage, nil
+	}
+	return f.page, nil
+}
+func (f *fakeSubStore) ResolveReplacement(context.Context, string, string) (*store.Replacement, error) {
+	if f.replPage != nil {
+		return &store.Replacement{InterestPointID: f.replIP.ID, Page: f.replPage}, nil
+	}
+	if f.replIP != nil {
+		return &store.Replacement{InterestPointID: f.replIP.ID}, nil
+	}
+	return nil, nil
+}
+
+func TestGradeForRecallSubstitutesSupersededPage(t *testing.T) {
+	st := &fakeSubStore{
+		page: &store.Page{ID: "pg-old", Title: "旧页", Status: "superseded", Claims: []store.Claim{
+			{Text: "old", Confidence: 0.9, Status: "supported"},
+		}},
+		replPage: &store.Page{ID: "pg-new", Title: "新页", Status: "active", Claims: []store.Claim{
+			{Text: "new", Confidence: 0.95, Status: "supported", Freshness: store.Freshness{Level: "fresh"}},
+		}},
+		replIP: &store.InterestPoint{ID: "ip-new", Name: "新点"},
+	}
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{{ID: "pg-old", Kind: "wiki_page", Score: 0.7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("graded = %d, want 1 (substituted)", len(got))
+	}
+	g := got[0]
+	if g.Hit.ID != "pg-new" || g.Hit.Kind != "wiki_page" {
+		t.Errorf("substituted hit = %+v, want pg-new", g.Hit)
+	}
+	if g.Title != "新页" {
+		t.Errorf("title = %q, want 新页", g.Title)
+	}
+}
+
+func TestGradeForRecallSubstitutesArchivedInterestPoint(t *testing.T) {
+	st := &fakeSubStore{
+		ip:     &store.InterestPoint{ID: "ip-old", Name: "旧点", Status: "archived"},
+		replIP: &store.InterestPoint{ID: "ip-new", Name: "新点"},
+		replPage: &store.Page{ID: "pg-new", Title: "新页", Status: "active", Claims: []store.Claim{
+			{Text: "n", Confidence: 0.9, Status: "supported"},
+		}},
+	}
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{{ID: "ip-old", Kind: "interest_point", Score: 0.8}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Hit.ID != "pg-new" {
+		t.Errorf("graded = %+v, want substituted pg-new", got)
 	}
 }
 

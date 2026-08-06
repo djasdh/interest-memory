@@ -71,9 +71,9 @@ func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string) *Writer {
   禁止链接工具名（如 [[verify_claims]]）、外部概念（如 [[PostgreSQL]]）、抽象标签（如 [[design-decision]]）或本 wiki 中不存在的页面。
 - 如果相关概念在本 wiki 中没有页面，不要用 [[]] 链接它，直接在正文中用普通文本提及。`
 	return &Writer{
-		deps: deps,
-		prov: prov,
-		system: system,
+		deps:    deps,
+		prov:    prov,
+		system:  system,
 		timeout: 10 * time.Minute,
 		runLoop: defaultRunLoop,
 	}

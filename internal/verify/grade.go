@@ -10,7 +10,9 @@ import (
 
 // GradeForRecall annotates recall hits (verify#3): resolves the entity's
 // stored reliability/freshness and attaches a self-check hint for the
-// consuming agent. Archived interest points are filtered out (not injected).
+// consuming agent. Archived interest points without a replacement are
+// filtered out (not injected); superseded entities resolve to their
+// replacement (silent substitution).
 func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec.Hit) ([]Graded, error) {
 	out := make([]Graded, 0, len(hits))
 	for _, h := range hits {
@@ -23,8 +25,19 @@ func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec
 		}
 		title, conf, status, fresh, evt, skip := s.loadEntity(ctx, agentID, h)
 		if skip {
-			continue
+			// Silently substitute a superseded/archived entity with its
+			// replacement when one exists; otherwise keep filtering.
+			sub, err := s.substitute(ctx, agentID, h)
+			if err != nil || sub == nil {
+				continue
+			}
+			h = *sub
+			title, conf, status, fresh, evt, skip = s.loadEntity(ctx, agentID, h)
+			if skip {
+				continue
+			}
 		}
+		g.Hit = h
 		g.Title = title
 		g.Confidence = conf
 		g.Status = status
@@ -33,6 +46,20 @@ func (s *service) GradeForRecall(ctx context.Context, agentID string, hits []vec
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// substitute resolves a hit on an archived/superseded entity to its live
+// replacement (preferring the successor wiki page over the bare successor
+// interest point). Returns nil when the entity has no replacement.
+func (s *service) substitute(ctx context.Context, agentID string, h vec.Hit) (*vec.Hit, error) {
+	rep, err := s.store.ResolveReplacement(ctx, agentID, h.ID)
+	if err != nil || rep == nil {
+		return nil, err
+	}
+	if rep.Page != nil {
+		return &vec.Hit{ID: rep.Page.ID, AgentID: agentID, Kind: "wiki_page", Score: h.Score}, nil
+	}
+	return &vec.Hit{ID: rep.InterestPointID, AgentID: agentID, Kind: "interest_point", Score: h.Score}, nil
 }
 
 // loadEntity resolves an interest point or wiki page hit into gradable data.

@@ -29,6 +29,14 @@ type Store interface {
 	GetPage(ctx context.Context, agentID, id string) (*store.Page, error)
 	Outlinks(ctx context.Context, agentID, sourceID string) ([]store.Edge, error)
 	Backlinks(ctx context.Context, agentID, targetID string) ([]store.Edge, error)
+	// ResolveReplacement returns the live successor of an archived/superseded
+	// entity (or nil) so search can silently substitute it.
+	ResolveReplacement(ctx context.Context, agentID, id string) (*store.Replacement, error)
+	// Full-text fallback: LIKE keyword search over stored entities. Used when
+	// vector search and the vector index's own keyword path both come up
+	// empty (SQLiteVec.SearchByKeywords is a no-op).
+	SearchInterestPointsByKeywords(ctx context.Context, agentID, query string, limit int) ([]store.InterestPoint, error)
+	SearchPagesByKeywords(ctx context.Context, agentID, query string, limit int) ([]store.Page, error)
 }
 
 // Grader annotates recall hits (implemented by verify.Verifier).
@@ -83,6 +91,18 @@ type Result struct {
 	Freshness   store.Freshness   `json:"freshness"`
 	Outlinks    []EdgeRef         `json:"outlinks"`
 	Backlinks   []EdgeRef         `json:"backlinks"`
+	// Replacement describes the live successor of an archived/superseded
+	// entity (nil when the entity is current). Populated by GetByID so the
+	// consumer can confirm what superseded this one.
+	Replacement *ReplacementRef `json:"replacement,omitempty"`
+}
+
+// ReplacementRef projects a successor for an archived/superseded entity.
+type ReplacementRef struct {
+	Kind   string `json:"kind"` // interest_point | wiki_page
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 type service struct {
@@ -131,6 +151,15 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 		kw, kerr := s.vec.SearchByKeywords(ctx, agentID, query, opts.TopK)
 		if kerr == nil && len(kw) > 0 {
 			hits = kw
+		}
+	}
+	// Double insurance: when both vector search and the vector index's own
+	// keyword path come up empty (SQLiteVec.SearchByKeywords is a no-op),
+	// fall back to the store's full-text LIKE search.
+	if len(hits) == 0 {
+		ft, ferr := s.fullTextFallback(ctx, agentID, query, opts.TopK)
+		if ferr == nil && len(ft) > 0 {
+			hits = ft
 		}
 	}
 	if len(hits) == 0 {
@@ -197,6 +226,50 @@ func (s *service) vecSearch(ctx context.Context, agentID, query string, topK int
 	return s.vec.Search(ctx, agentID, q, topK)
 }
 
+// fullTextFallback runs LIKE keyword search over stored interest points and
+// wiki pages (the store's own text columns), mapping results to vector hits
+// with their title in Meta. It backs the SQLiteVec deployment where
+// SearchByKeywords is a no-op. Archived/superseded entities are filtered out
+// here so they never surface in fallback results.
+func (s *service) fullTextFallback(ctx context.Context, agentID, query string, topK int) ([]vec.Hit, error) {
+	if s.store == nil || strings.TrimSpace(query) == "" || topK <= 0 {
+		return nil, nil
+	}
+	var out []vec.Hit
+	if ips, err := s.store.SearchInterestPointsByKeywords(ctx, agentID, query, topK); err == nil {
+		for _, p := range ips {
+			if p.Status == "archived" {
+				continue
+			}
+			out = append(out, vec.Hit{
+				ID:      p.ID,
+				AgentID: agentID,
+				Kind:    "interest_point",
+				Score:   0.5,
+				Meta:    map[string]string{"title": p.Name},
+			})
+		}
+	}
+	if pgs, err := s.store.SearchPagesByKeywords(ctx, agentID, query, topK); err == nil {
+		for _, p := range pgs {
+			if p.Status != "" && p.Status != "active" {
+				continue
+			}
+			out = append(out, vec.Hit{
+				ID:      p.ID,
+				AgentID: agentID,
+				Kind:    "wiki_page",
+				Score:   0.5,
+				Meta:    map[string]string{"title": p.Title},
+			})
+		}
+	}
+	if len(out) > topK {
+		out = out[:topK]
+	}
+	return out, nil
+}
+
 // assemble renders the recalled context as bare text. The Hermes plugin
 // re-wraps it in <memory-context> (build_memory_context_block), so we must
 // NOT emit the fence here (stage 6 decision: 服务端返回裸文本).
@@ -210,7 +283,7 @@ func assemble(graded []verify.Graded) string {
 
 func renderOne(g verify.Graded) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("- %s [%s]", titleOf(g), g.Hit.Kind))
+	b.WriteString(fmt.Sprintf("- [%s] %s [%s]", g.Hit.ID, titleOf(g), g.Hit.Kind))
 	if !g.EventTime.IsZero() {
 		b.WriteString(fmt.Sprintf(" (at %s)", g.EventTime.UTC().Format("2006-01-02")))
 	}
@@ -257,6 +330,14 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 			hits = kw
 		}
 	}
+	// Double insurance: store full-text LIKE search when vector + vector-keyword
+	// both miss (SQLiteVec.SearchByKeywords is a no-op).
+	if len(hits) == 0 {
+		ft, ferr := s.fullTextFallback(ctx, agentID, query, topK)
+		if ferr == nil && len(ft) > 0 {
+			hits = ft
+		}
+	}
 	if len(hits) > topK {
 		hits = hits[:topK]
 	}
@@ -274,63 +355,108 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 }
 
 // GetByID returns one entity with full content + edges, or nil when unknown.
+// Archived/superseded entities are returned with their status and a
+// replacement ref so the consumer can confirm what superseded them (unlike
+// Search, which silently substitutes the replacement).
 func (s *service) GetByID(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, nil
 	}
 	if p, err := s.store.GetInterestPoint(ctx, agentID, id); err == nil && p != nil {
+		// Archived: surface the record itself with its status + replacement.
+		if p.Status == "archived" {
+			r := &Result{
+				Kind:        "interest_point",
+				ID:          p.ID,
+				Title:       p.Name,
+				BodyMD:      truncate(p.Summary, maxBodyLen),
+				Status:      p.Status,
+				Subjective:  p.Subjective,
+				Evidence:    p.Reliability.Evidence,
+				Reliability: p.Reliability,
+				Freshness:   p.Freshness,
+			}
+			s.attachEdges(ctx, agentID, id, r)
+			s.attachReplacement(ctx, agentID, id, r)
+			return r, nil
+		}
 		return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "interest_point"}, maxBodyLen)
 	}
 	pg, err := s.store.GetPage(ctx, agentID, id)
 	if err != nil || pg == nil {
 		return nil, nil
 	}
+	// Archived/superseded page: return its own state + replacement.
+	if pg.Status != "" && pg.Status != "active" {
+		r := &Result{
+			Kind:      "wiki_page",
+			ID:        pg.ID,
+			Title:     pg.Title,
+			BodyMD:    truncate(pg.BodyMD, maxBodyLen),
+			Status:    pg.Status,
+			Claims:    pg.Claims,
+			Freshness: store.Freshness{Level: "unknown"},
+		}
+		s.attachEdges(ctx, agentID, id, r)
+		s.attachReplacement(ctx, agentID, id, r)
+		return r, nil
+	}
 	return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "wiki_page"}, maxBodyLen)
 }
 
 // resultFor assembles one Result for a hit, attaching edges with far-end
-// titles. Archived/superseded entities are filtered out.
+// titles. Archived/superseded entities without a live replacement are
+// filtered out; when a replacement exists the hit is silently substituted
+// with the successor page (design: 替代静默替换).
 func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxBodyLen int) (*Result, error) {
 	if h.Kind == "interest_point" {
 		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
 		if err != nil || p == nil {
 			return nil, nil
 		}
-		if p.Status == "archived" {
+		if p.Status != "archived" {
+			r := &Result{
+				Kind:        "interest_point",
+				ID:          p.ID,
+				Title:       p.Name,
+				BodyMD:      truncate(p.Summary, maxBodyLen),
+				Status:      p.Status,
+				Subjective:  p.Subjective,
+				Evidence:    p.Reliability.Evidence,
+				Reliability: p.Reliability,
+				Freshness:   p.Freshness,
+			}
+			s.attachEdges(ctx, agentID, h.ID, r)
+			return r, nil
+		}
+	} else {
+		pg, err := s.store.GetPage(ctx, agentID, h.ID)
+		if err != nil || pg == nil {
 			return nil, nil
 		}
-		r := &Result{
-			Kind:        "interest_point",
-			ID:          p.ID,
-			Title:       p.Name,
-			BodyMD:      truncate(p.Summary, maxBodyLen),
-			Status:      p.Status,
-			Subjective:  p.Subjective,
-			Evidence:    p.Reliability.Evidence,
-			Reliability: p.Reliability,
-			Freshness:   p.Freshness,
+		if pg.Status == "" || pg.Status == "active" {
+			r := &Result{
+				Kind:      "wiki_page",
+				ID:        pg.ID,
+				Title:     pg.Title,
+				BodyMD:    truncate(pg.BodyMD, maxBodyLen),
+				Status:    pg.Status,
+				Claims:    pg.Claims,
+				Freshness: store.Freshness{Level: "unknown"},
+			}
+			s.attachEdges(ctx, agentID, h.ID, r)
+			return r, nil
 		}
-		s.attachEdges(ctx, agentID, h.ID, r)
-		return r, nil
 	}
-	pg, err := s.store.GetPage(ctx, agentID, h.ID)
-	if err != nil || pg == nil {
+	// Archived/superseded: silently substitute the live replacement.
+	rep, err := s.store.ResolveReplacement(ctx, agentID, h.ID)
+	if err != nil || rep == nil {
 		return nil, nil
 	}
-	if pg.Status != "" && pg.Status != "active" {
-		return nil, nil
+	if rep.Page != nil {
+		return s.resultFor(ctx, agentID, vec.Hit{ID: rep.Page.ID, Kind: "wiki_page", Score: h.Score}, maxBodyLen)
 	}
-	r := &Result{
-		Kind:      "wiki_page",
-		ID:        pg.ID,
-		Title:     pg.Title,
-		BodyMD:    truncate(pg.BodyMD, maxBodyLen),
-		Status:    pg.Status,
-		Claims:    pg.Claims,
-		Freshness: store.Freshness{Level: "unknown"},
-	}
-	s.attachEdges(ctx, agentID, h.ID, r)
-	return r, nil
+	return s.resultFor(ctx, agentID, vec.Hit{ID: rep.InterestPointID, Kind: "interest_point", Score: h.Score}, maxBodyLen)
 }
 
 // attachEdges fills Outlinks/Backlinks, resolving the far-end title (page
@@ -345,6 +471,24 @@ func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result
 		for _, e := range ins {
 			r.Backlinks = append(r.Backlinks, s.edgeRef(ctx, agentID, e, e.SourceID))
 		}
+	}
+}
+
+// attachReplacement resolves and attaches the live successor of an
+// archived/superseded entity (best-effort; nil on any failure).
+func (s *service) attachReplacement(ctx context.Context, agentID, id string, r *Result) {
+	rep, err := s.store.ResolveReplacement(ctx, agentID, id)
+	if err != nil || rep == nil {
+		return
+	}
+	if rep.Page != nil {
+		r.Replacement = &ReplacementRef{Kind: "wiki_page", ID: rep.Page.ID, Title: rep.Page.Title, Status: rep.Page.Status}
+		return
+	}
+	r.Replacement = &ReplacementRef{Kind: "interest_point", ID: rep.InterestPointID}
+	if p, err := s.store.GetInterestPoint(ctx, agentID, rep.InterestPointID); err == nil && p != nil {
+		r.Replacement.Title = p.Name
+		r.Replacement.Status = p.Status
 	}
 }
 

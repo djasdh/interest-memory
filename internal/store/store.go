@@ -28,6 +28,10 @@ type Store interface {
 	Outlinks(ctx context.Context, agentID, sourceID string) ([]Edge, error)
 	Backlinks(ctx context.Context, agentID, targetID string) ([]Edge, error)
 	DeleteEdgesFor(ctx context.Context, agentID, sourceID string) error
+	// ResolveReplacement returns the live successor of an archived/superseded
+	// entity (or nil), following sequel edges. Used by recall/search to
+	// silently substitute superseded entities.
+	ResolveReplacement(ctx context.Context, agentID, id string) (*Replacement, error)
 
 	// ---- pending links (死链反馈) ----
 	// RecordPendingLink notes a [[target]] in page sourceID that has no

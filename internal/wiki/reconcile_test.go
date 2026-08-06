@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"interest-memory/internal/store"
 
@@ -120,10 +121,113 @@ func TestReconcileBatchesOverTen(t *testing.T) {
 func TestReconcilePromptMentionsChanges(t *testing.T) {
 	in := ReconcileInput{TouchedPages: []string{"page-a"}, ArchivedPoints: []string{"ip-1"}}
 	batch := []store.Page{{ID: "page-b", Title: "B", Status: "active", BodyMD: "old"}}
-	prompt := buildReconcilePrompt(in, batch)
-	for _, want := range []string{"page-a", "ip-1", "page-b", "superseded"} {
+	prompt := buildReconcilePrompt(in, []ArchivedInfo{{ID: "ip-1", Title: "旧点", Superseded: true, ReplacementID: "ip-2", ReplacementTitle: "新点"}}, batch)
+	for _, want := range []string{"page-a", "ip-1", "ip-2", "page-b", "替代"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("reconcile prompt missing %q\n---\n%s", want, prompt)
 		}
+	}
+}
+
+func TestReconcilePromptDeleteShowsOutlinks(t *testing.T) {
+	in := ReconcileInput{ArchivedPoints: []string{"ip-1"}}
+	batch := []store.Page{{ID: "page-b", Title: "B", Status: "active"}}
+	archived := []ArchivedInfo{{
+		ID:    "ip-1",
+		Title: "旧点",
+		Outlinks: []store.Edge{
+			{SourceID: "ip-1", TargetID: "page-x", Kind: store.EdgeHasPage},
+			{SourceID: "ip-1", TargetID: "ip-2", Kind: store.EdgeRelated},
+		},
+	}}
+	prompt := buildReconcilePrompt(in, archived, batch)
+	for _, want := range []string{"删除", "ip-1", "has_page→page-x", "related→ip-2"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("delete reconcile prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+}
+
+func TestAllArchived(t *testing.T) {
+	if allArchived([]store.Page{{Status: "superseded"}, {Status: "archived"}}) != true {
+		t.Error("all archived pages should be allArchived")
+	}
+	if allArchived([]store.Page{{Status: "active"}}) != false {
+		t.Error("active page should not be allArchived")
+	}
+	if allArchived(nil) != true {
+		t.Error("empty set should be allArchived (no content)")
+	}
+}
+
+func TestDescribeArchived(t *testing.T) {
+	s := describeArchived(ArchivedInfo{ID: "ip-1", Title: "旧", Superseded: true, ReplacementID: "ip-2", ReplacementTitle: "新"})
+	if !strings.Contains(s, "替代链路") || !strings.Contains(s, "ip-1") || !strings.Contains(s, "ip-2") {
+		t.Errorf("superseded describe missing replacement chain: %q", s)
+	}
+	d := describeArchived(ArchivedInfo{ID: "ip-1", Outlinks: []store.Edge{{TargetID: "p1", Kind: store.EdgeHasPage}}})
+	if !strings.Contains(d, "原本出边") || !strings.Contains(d, "p1") {
+		t.Errorf("deleted describe missing outlinks: %q", d)
+	}
+}
+
+func TestApplyCodeFallbackMarksSupersededAndRewritesLinks(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Old chain: ip-old --has_page--> pg-old, ip-old --sequel--> ip-new,
+	// ip-new --has_page--> pg-new. A backlink page references [[pg-old]].
+	deps.Store.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-old", AgentID: "a", Name: "旧", Status: "archived"})
+	deps.Store.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-new", AgentID: "a", Name: "新", Status: "active"})
+	deps.Store.UpsertPage(ctx, store.Page{ID: "pg-old", AgentID: "a", Title: "旧页", Status: "active", CreatedAt: now, UpdatedAt: now})
+	deps.Store.UpsertPage(ctx, store.Page{ID: "pg-new", AgentID: "a", Title: "新页", Status: "active", CreatedAt: now, UpdatedAt: now})
+	deps.Store.UpsertPage(ctx, store.Page{ID: "pg-back", AgentID: "a", Title: "引用页", Status: "active",
+		BodyMD: "见 [[pg-old]] 说明", CreatedAt: now, UpdatedAt: now})
+	deps.Store.AddEdgePair(ctx, "a", store.Edge{SourceID: "ip-old", TargetID: "pg-old", Kind: store.EdgeHasPage, Weight: 1})
+	deps.Store.AddEdgePair(ctx, "a", store.Edge{SourceID: "ip-old", TargetID: "ip-new", Kind: store.EdgeSequel, Weight: 1})
+	deps.Store.AddEdgePair(ctx, "a", store.Edge{SourceID: "ip-new", TargetID: "pg-new", Kind: store.EdgeHasPage, Weight: 1})
+	deps.Store.AddEdgePair(ctx, "a", store.Edge{SourceID: "pg-back", TargetID: "pg-old", Kind: store.EdgeReference, Weight: 1})
+
+	w := &Writer{deps: deps}
+	archived := []ArchivedInfo{{ID: "ip-old", Superseded: true, ReplacementID: "ip-new"}}
+	if err := w.applyCodeFallback(ctx, "a", archived); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old page marked superseded.
+	oldPg, _ := deps.Store.GetPage(ctx, "a", "pg-old")
+	if oldPg == nil || oldPg.Status != "superseded" {
+		t.Errorf("old page status = %+v, want superseded", oldPg)
+	}
+	// Backlink wikilink rewritten to the new page.
+	back, _ := deps.Store.GetPage(ctx, "a", "pg-back")
+	if back == nil || !strings.Contains(back.BodyMD, "[[pg-new]]") || strings.Contains(back.BodyMD, "[[pg-old]]") {
+		t.Errorf("backlink body = %q, want rewritten [[pg-new]]", back.BodyMD)
+	}
+}
+
+func TestReconcileSilentWhenAllRelatedArchived(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	deps.Store.UpsertPage(ctx, store.Page{ID: "pg-a", AgentID: "a", Title: "A", Status: "superseded", CreatedAt: now, UpdatedAt: now})
+	deps.Store.AddEdgePair(ctx, "a", store.Edge{SourceID: "pg-a", TargetID: "pg-b", Kind: store.EdgeRelated, Weight: 1})
+	deps.Store.UpsertPage(ctx, store.Page{ID: "pg-b", AgentID: "a", Title: "B", Status: "archived", CreatedAt: now, UpdatedAt: now})
+
+	runner := &fakeRunner{}
+	w := &Writer{deps: deps, runLoop: runner.run}
+	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
+	w.prov = func(context.Context) (*provider.Provider, error) {
+		return provider.NewConfiguredProvider(model, "k"), nil
+	}
+
+	err := w.ReconcileRelated(ctx, "a", ReconcileInput{TouchedPages: []string{"pg-a"}}, 3, 10)
+	if err != nil {
+		t.Fatalf("ReconcileRelated: %v", err)
+	}
+	if runner.calls != 0 {
+		t.Errorf("loop calls = %d, want 0 (all related archived → silent)", runner.calls)
 	}
 }

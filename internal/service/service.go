@@ -111,7 +111,10 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	if err != nil {
 		return fmt.Errorf("service: interest: %w", err)
 	}
-	if len(pts) == 0 {
+	// Continue when only deletions happened: archived points still need to
+	// reach the reconcile stage (cascade-archive related pages). Pure no-op
+	// runs (nothing persisted, nothing archived) return early.
+	if len(pts) == 0 && len(archived) == 0 {
 		return nil
 	}
 

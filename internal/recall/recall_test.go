@@ -53,6 +53,68 @@ func (f *fakeStore) Outlinks(_ context.Context, _, id string) ([]store.Edge, err
 func (f *fakeStore) Backlinks(_ context.Context, _, id string) ([]store.Edge, error) {
 	return f.ins[id], nil
 }
+func (f *fakeStore) SearchInterestPointsByKeywords(_ context.Context, _, query string, _ int) ([]store.InterestPoint, error) {
+	var out []store.InterestPoint
+	for _, p := range f.ips {
+		if strings.Contains(p.Name, query) || strings.Contains(p.Summary, query) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) SearchPagesByKeywords(_ context.Context, _, query string, _ int) ([]store.Page, error) {
+	var out []store.Page
+	for _, p := range f.pgs {
+		if strings.Contains(p.Title, query) || strings.Contains(p.BodyMD, query) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) ResolveReplacement(_ context.Context, _, id string) (*store.Replacement, error) {
+	ipID := id
+	if _, ok := f.pgs[id]; ok {
+		ipID = ""
+		for _, e := range f.ins[id] {
+			if e.Kind == store.EdgeHasPage {
+				ipID = e.SourceID
+				break
+			}
+		}
+	}
+	cur := ipID
+	for cur != "" {
+		var next string
+		for _, e := range f.outs[cur] {
+			if e.Kind == store.EdgeSequel {
+				next = e.TargetID
+				break
+			}
+		}
+		if next == "" {
+			return nil, nil
+		}
+		ip, ok := f.ips[next]
+		if !ok || ip == nil {
+			return nil, nil
+		}
+		if ip.Status == "archived" {
+			cur = next
+			continue
+		}
+		rep := &store.Replacement{InterestPointID: next}
+		for _, oe := range f.outs[next] {
+			if oe.Kind == store.EdgeHasPage {
+				if pg, ok := f.pgs[oe.TargetID]; ok && pg != nil {
+					rep.Page = pg
+					break
+				}
+			}
+		}
+		return rep, nil
+	}
+	return nil, nil
+}
 
 type fakeGrader struct{ evt time.Time }
 
@@ -84,6 +146,9 @@ func TestRecallAssemblesMemoryContext(t *testing.T) {
 	}
 	if strings.Contains(out, "<memory-context>") || strings.Contains(out, "</memory-context>") {
 		t.Fatalf("should return bare text (no fence): %q", out)
+	}
+	if !strings.Contains(out, "[ip1]") || !strings.Contains(out, "[pg1]") {
+		t.Errorf("missing hit ids: %s", out)
 	}
 	if !strings.Contains(out, "T-ip1") || !strings.Contains(out, "T-pg1") {
 		t.Errorf("missing hits: %s", out)
@@ -327,5 +392,176 @@ func TestGetByIDResolvesPageAndInterestPoint(t *testing.T) {
 	}
 	if missing != nil {
 		t.Errorf("missing id should return nil, got %+v", missing)
+	}
+}
+
+func TestSearchSilentlySubstitutesSupersededPage(t *testing.T) {
+	oldPg := &store.Page{ID: "pg-old", AgentID: "a", Title: "旧页", Status: "superseded", BodyMD: "old content"}
+	newPg := &store.Page{ID: "pg-new", AgentID: "a", Title: "新页", Status: "active", BodyMD: "new content"}
+	oldIP := &store.InterestPoint{ID: "ip-old", AgentID: "a", Name: "旧点", Status: "archived"}
+	newIP := &store.InterestPoint{ID: "ip-new", AgentID: "a", Name: "新点", Status: "active"}
+	st := &fakeStore{
+		ips: map[string]*store.InterestPoint{"ip-old": oldIP, "ip-new": newIP},
+		pgs: map[string]*store.Page{"pg-old": oldPg, "pg-new": newPg},
+		outs: map[string][]store.Edge{
+			"ip-old": {
+				{SourceID: "ip-old", TargetID: "pg-old", Kind: store.EdgeHasPage, Weight: 1},
+				{SourceID: "ip-old", TargetID: "ip-new", Kind: store.EdgeSequel, Weight: 1},
+			},
+			"ip-new": {{SourceID: "ip-new", TargetID: "pg-new", Kind: store.EdgeHasPage, Weight: 1}},
+			"pg-old": {},
+			"pg-new": {},
+		},
+		ins: map[string][]store.Edge{
+			"pg-old": {{SourceID: "ip-old", TargetID: "pg-old", Kind: store.EdgeHasPage, Weight: 1}},
+			"pg-new": {{SourceID: "ip-new", TargetID: "pg-new", Kind: store.EdgeHasPage, Weight: 1}},
+		},
+	}
+	s := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{{ID: "pg-old", Kind: "wiki_page", Score: 0.9}}}, st, &fakeGrader{})
+	results, err := s.Search(context.Background(), "a", "q", 5, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1 (substituted)", len(results))
+	}
+	if results[0].ID != "pg-new" || results[0].Title != "新页" || results[0].BodyMD != "new content" {
+		t.Errorf("search did not substitute superseded page: %+v", results[0])
+	}
+}
+
+func TestGetByIDArchivedReturnsStatusAndReplacement(t *testing.T) {
+	oldPg := &store.Page{ID: "pg-old", AgentID: "a", Title: "旧页", Status: "superseded", BodyMD: "old"}
+	newPg := &store.Page{ID: "pg-new", AgentID: "a", Title: "新页", Status: "active", BodyMD: "new"}
+	oldIP := &store.InterestPoint{ID: "ip-old", AgentID: "a", Name: "旧点", Status: "archived"}
+	newIP := &store.InterestPoint{ID: "ip-new", AgentID: "a", Name: "新点", Status: "active"}
+	st := &fakeStore{
+		ips: map[string]*store.InterestPoint{"ip-old": oldIP, "ip-new": newIP},
+		pgs: map[string]*store.Page{"pg-old": oldPg, "pg-new": newPg},
+		outs: map[string][]store.Edge{
+			"ip-old": {
+				{SourceID: "ip-old", TargetID: "pg-old", Kind: store.EdgeHasPage, Weight: 1},
+				{SourceID: "ip-old", TargetID: "ip-new", Kind: store.EdgeSequel, Weight: 1},
+			},
+			"ip-new": {{SourceID: "ip-new", TargetID: "pg-new", Kind: store.EdgeHasPage, Weight: 1}},
+			"pg-old": {},
+			"pg-new": {},
+		},
+		ins: map[string][]store.Edge{
+			"pg-old": {{SourceID: "ip-old", TargetID: "pg-old", Kind: store.EdgeHasPage, Weight: 1}},
+			"pg-new": {{SourceID: "ip-new", TargetID: "pg-new", Kind: store.EdgeHasPage, Weight: 1}},
+		},
+	}
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
+
+	r, err := s.GetByID(context.Background(), "a", "pg-old", 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("GetByID returned nil for superseded page")
+	}
+	if r.Status != "superseded" {
+		t.Errorf("status = %q, want superseded", r.Status)
+	}
+	if r.Replacement == nil || r.Replacement.ID != "pg-new" || r.Replacement.Kind != "wiki_page" {
+		t.Errorf("replacement = %+v, want pg-new", r.Replacement)
+	}
+}
+
+func TestRenderOneIncludesID(t *testing.T) {
+	g := verify.Graded{
+		Hit:        vec.Hit{ID: "ip-abc123", AgentID: "a", Kind: "interest_point", Score: 0.8},
+		Title:      "Go 并发",
+		Confidence: 0.9,
+		Status:     "supported",
+		FreshLevel: "fresh",
+		Note:       "note",
+	}
+	out := renderOne(g)
+	if !strings.Contains(out, "- [ip-abc123] Go 并发 [interest_point]") {
+		t.Errorf("renderOne missing id prefix: %q", out)
+	}
+	pg := verify.Graded{
+		Hit:   vec.Hit{ID: "pg-xyz", AgentID: "a", Kind: "wiki_page", Score: 0.7},
+		Title: "PostgreSQL",
+	}
+	out = renderOne(pg)
+	if !strings.Contains(out, "- [pg-xyz] PostgreSQL [wiki_page]") {
+		t.Errorf("renderOne missing wiki page id prefix: %q", out)
+	}
+}
+
+func TestRecallFullTextFallback(t *testing.T) {
+	ip := &store.InterestPoint{ID: "ip-ft", AgentID: "a", Name: "Go 并发模型", Summary: "goroutine 与 channel", Status: "active"}
+	pg := &store.Page{ID: "pg-ft", AgentID: "a", Title: "并发编程", BodyMD: "goroutine channel 用法", Status: "active"}
+	st := &fakeStore{
+		ips: map[string]*store.InterestPoint{"ip-ft": ip},
+		pgs: map[string]*store.Page{"pg-ft": pg},
+	}
+	// vec returns nothing; store full-text fallback supplies the hits.
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
+	out, err := s.Recall(context.Background(), "a", "goroutine", Options{TopK: 8, IncludeWiki: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[ip-ft]") || !strings.Contains(out, "[interest_point]") {
+		t.Errorf("recall full-text fallback missing interest point: %q", out)
+	}
+	if !strings.Contains(out, "[pg-ft]") || !strings.Contains(out, "[wiki_page]") {
+		t.Errorf("recall full-text fallback missing page: %q", out)
+	}
+}
+
+func TestRecallFullTextFallbackRespectsIncludeWiki(t *testing.T) {
+	pg := &store.Page{ID: "pg-ft", AgentID: "a", Title: "并发编程", BodyMD: "goroutine 用法", Status: "active"}
+	st := &fakeStore{pgs: map[string]*store.Page{"pg-ft": pg}}
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
+	out, err := s.Recall(context.Background(), "a", "goroutine", Options{TopK: 8, IncludeWiki: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "pg-ft") {
+		t.Errorf("full-text wiki page should be excluded when IncludeWiki=false: %q", out)
+	}
+}
+
+func TestSearchFullTextFallback(t *testing.T) {
+	pg := &store.Page{ID: "pg-ft", AgentID: "a", Title: "并发编程", BodyMD: "goroutine channel 用法", Status: "active"}
+	st := &fakeStore{pgs: map[string]*store.Page{"pg-ft": pg}}
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
+	results, err := s.Search(context.Background(), "a", "goroutine", 5, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1 from full-text fallback", len(results))
+	}
+	if results[0].ID != "pg-ft" || results[0].Title != "并发编程" {
+		t.Errorf("search full-text fallback = %+v", results[0])
+	}
+}
+
+func TestFullTextFallbackCarriesTitleMeta(t *testing.T) {
+	ip := &store.InterestPoint{ID: "ip-ft", AgentID: "a", Name: "Go 并发模型", Summary: "goroutine", Status: "active"}
+	pg := &store.Page{ID: "pg-ft", AgentID: "a", Title: "并发编程", BodyMD: "goroutine", Status: "active"}
+	st := &fakeStore{
+		ips: map[string]*store.InterestPoint{"ip-ft": ip},
+		pgs: map[string]*store.Page{"pg-ft": pg},
+	}
+	s := New(fakeEmbedder{}, &fakeVec{}, st, &fakeGrader{})
+	hits, err := s.(*service).fullTextFallback(context.Background(), "a", "goroutine", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("hits = %d, want 2", len(hits))
+	}
+	titles := map[string]string{}
+	for _, h := range hits {
+		titles[h.ID] = h.Meta["title"]
+	}
+	if titles["ip-ft"] != "Go 并发模型" || titles["pg-ft"] != "并发编程" {
+		t.Errorf("fallback hit titles = %v, want ip-ft→Go 并发模型 / pg-ft→并发编程", titles)
 	}
 }
