@@ -60,7 +60,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          dir=$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)
+          dir=$(go list -f '{{.Dir}}' github.com/mattn/go-sqlite3)
           mkdir -p "$RUNNER_TEMP/sqlitehdr"
           cp "$dir/sqlite3-binding.h" "$RUNNER_TEMP/sqlitehdr/sqlite3.h"
           echo "CGO_CFLAGS=-I$RUNNER_TEMP/sqlitehdr" >> "$GITHUB_ENV"
