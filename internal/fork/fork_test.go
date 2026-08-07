@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/llm"
 )
 
 // mockLLM implements LLM by capturing the prompt and returning canned

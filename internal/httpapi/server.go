@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"interest-memory/internal/recall"
-	"interest-memory/internal/store"
-	"interest-memory/internal/worker"
+	"github.com/djasdh/interest-memory/internal/recall"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/worker"
 )
 
 // Service is the orchestration surface the HTTP layer calls (implemented by

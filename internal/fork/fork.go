@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/llm"
 )
 
 // Candidate is one interest point extracted from a conversation window.

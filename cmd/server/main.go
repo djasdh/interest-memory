@@ -10,13 +10,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/httpapi"
-	"interest-memory/internal/llm"
-	"interest-memory/internal/service"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/worker"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/httpapi"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/service"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/worker"
 
 	"github.com/djasdh/my-agent-core/gateway"
 )

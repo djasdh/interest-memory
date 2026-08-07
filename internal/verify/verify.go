@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/fork"
-	"interest-memory/internal/llm"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/websearch"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/fork"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/websearch"
 )
 
 // LLM is the chat surface the correction layer needs (implemented by

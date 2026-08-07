@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"interest-memory/internal/llm"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/websearch"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/websearch"
 
 	"github.com/djasdh/my-agent-core/types"
 )

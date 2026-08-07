@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/store"
 )
 
 // Status of a job.

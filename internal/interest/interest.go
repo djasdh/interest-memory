@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/verify"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/verify"
 )
 
 // Embedder computes embeddings for candidate text (implemented by

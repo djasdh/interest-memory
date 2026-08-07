@@ -6,6 +6,14 @@ English | [中文](README.md)
 
 A standalone Go memory service: at session end it extracts interest points from a conversation, verifies/cleans them, and writes them into a wiki with bidirectional links; at session start it recalls and injects context via RAG. Provides long-term memory for consumer agents such as Hermes.
 
+## Design highlights
+
+- **Lightweight** — a single binary (~19 MB, cgo-static sqlite-vec); idle memory ~20–40 MB, pipeline peak <75 MB (measured, see benchmark below); all data lives in one local SQLite file, no external database
+- **Self-host friendly** — one binary + one config file is the whole service; no cloud dependency (LLM/embedding go through OpenAI-compatible `base_url`, point it at local Ollama/vLLM etc. for fully offline use); `scripts/install.sh` guided installer + systemd autostart
+- **Strict memory audit** — every structural change is written to `change_log` (title + action + structural edges), replayable; evidence located to web URL / conversation turns / search query; claim extraction + contradiction-closure loop
+- **Subjectivity exemption** — points judged to be the user's own preferences/opinions skip web fact-checking but still pass the LLM verdict, keeping subjective leanings out of the factual store
+- **Progressive disclosure** — session injection carries only lean entries (`recall`: top_k + score gate + truncation); full content + edges are fetched on demand (`memory_search`), minimizing context pollution
+
 ## Features
 
 - **Prefix-window parallel extraction** — one prefix-window step per 5 user turns (no split below 5), extracted in parallel, hitting DeepSeek/SiliconFlow prefix caching
@@ -15,6 +23,21 @@ A standalone Go memory service: at session end it extracts interest points from 
 - **Consumer querying** — lean `recall` injection plus `memory_search` (full content + edges) and `memory_logs` tools
 - **Temporal support** — `session_date` passthrough → event time (EventTime) → recall time filtering (after/before/last N days), supporting LongMemEval temporal evaluation
 - **Full audit trail** — change_log records every structural change (title + action + structural edges); tag taxonomy (`ListTags` aggregation + `wiki_tags` tool)
+
+## Resource benchmark (measured)
+
+Measured on a test workflow (Go 1.26 + cgo, full `scripts/e2e.sh` pipeline):
+
+| Metric | Value |
+|---|---|
+| Binary size | ~19 MB (cgo-static sqlite-vec) |
+| Idle memory (no job, standby) | ~20–40 MB RSS |
+| Pipeline peak memory | <75 MB RSS (parallel windows + verification + agent loop) |
+| Empty-store disk | ~88 KB (single SQLite file) |
+| Initial footprint | ~20 MB (binary + empty store) |
+| Growth in sustained use | ~38 MB after about a week (measured); dominated by full session transcripts (~71%), the rest vectors + interest points/wiki pages |
+
+The advertised "50 MB memory" figure corresponds to **idle/typical** use; peaks reach ~75 MB. "20 MB disk" is the **initial** footprint, growing with memory and transcripts. Lower `fork.max_concurrency` / `verify.max_concurrency` in `config.example.yaml` to cap peak memory; `session_transcripts` keeps the full raw text — clean it up externally if you need to bound disk growth.
 
 ## Architecture & Data Flow
 
@@ -37,7 +60,7 @@ Consumer tools: memory_search (query/id + full content + edges) / memory_logs (c
 
 ## Quick Start
 
-**Prerequisites**: Go 1.22+, CGO (static sqlite-vec), DeepSeek + SiliconFlow API keys.
+**Prerequisites**: Go 1.25+, CGO (static sqlite-vec), LLM + embedding API keys.
 
 ```bash
 # 0. One-shot installer (guided wizard: build server + provider config + optional agent bridges)
@@ -54,6 +77,10 @@ cp config.example.yaml config.yaml
 # Provide keys via environment variables
 export LLM_API_KEY=...         # LLM extraction / verification / writing
 export SILICONFLOW_API_KEY=...  # embedding (BAAI/bge-m3, 1024 dims)
+
+# Fully local: when both LLM and embedding use OpenAI-compatible endpoints, set
+# llm.base_url / embedding.base_url to a local Ollama / vLLM / LM Studio etc.
+# for zero cloud dependency.
 
 # 3. Run (default :8899)
 ./server -config config.yaml

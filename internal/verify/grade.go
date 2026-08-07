@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/vec"
 )
 
 // GradeForRecall annotates recall hits (verify#3): resolves the entity's

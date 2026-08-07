@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/config"
 )
 
 func testLLMConfig(srvURL string) config.LLMConfig {

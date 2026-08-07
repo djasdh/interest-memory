@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/websearch"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/websearch"
 
 	_ "github.com/djasdh/my-agent-core/web_search/provider" // register the 12 search providers
 

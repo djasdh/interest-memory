@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/llm"
 
 	"github.com/djasdh/my-agent-core/types"
 )

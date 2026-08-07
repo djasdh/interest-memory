@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/config"
 )
 
 // Embedder produces vector embeddings for text via an OpenAI-compatible

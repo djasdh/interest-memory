@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"interest-memory/internal/llm"
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/store"
 )
 
 // claimExtract is the LLM's JSON output for CheckClaims (one page's claims).

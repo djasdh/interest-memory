@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/config"
 )
 
 // Message is one chat turn in OpenAI format.

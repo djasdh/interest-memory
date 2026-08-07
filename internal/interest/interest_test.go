@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/fork"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/verify"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/fork"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/verify"
 )
 
 type fakeEmbedder struct{}

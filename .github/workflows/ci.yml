@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go (test -race + vet + fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install cgo deps (sqlite-vec static link)
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsqlite3-dev
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        run: CGO_ENABLED=1 go vet ./...
+      - name: Go tests (with race)
+        run: CGO_ENABLED=1 go test -race ./...
+
+  bridge:
+    name: Bridge tests (node:test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run bridge tests
+        run: |
+          node --test bridge/opencode/memory-lib.test.mjs
+          node --test bridge/openclaw/interest-memory/lib.test.mjs
+          node --test bridge/pi/lib.test.mjs
+          node --test bridge/mcp-server/lib.test.mjs
+          node --test bridge/claudecode/hooks/lib.test.mjs
+          node --test bridge/codex/hooks/lib.test.mjs
+          node --test bridge/reasonix/hooks/lib.test.mjs
+
+  e2e:
+    name: E2E (real LLM, manual/scheduled only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install cgo deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsqlite3-dev python3
+      - name: Run e2e
+        run: bash scripts/e2e.sh

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/store"
 
 	"github.com/djasdh/my-agent-core/provider"
 	"github.com/djasdh/my-agent-core/types"

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"interest-memory/internal/recall"
-	"interest-memory/internal/store"
-	"interest-memory/internal/worker"
+	"github.com/djasdh/interest-memory/internal/recall"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/worker"
 )
 
 // fakeService implements Service for handler tests.

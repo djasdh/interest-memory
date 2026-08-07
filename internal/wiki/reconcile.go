@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/store"
 
 	"github.com/djasdh/my-agent-core/types"
 )

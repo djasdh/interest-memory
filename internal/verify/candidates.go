@@ -6,11 +6,11 @@ import (
 	"strings"
 	"sync"
 
-	"interest-memory/internal/fork"
-	"interest-memory/internal/llm"
-	"interest-memory/internal/store"
-	"interest-memory/internal/vec"
-	"interest-memory/internal/websearch"
+	"github.com/djasdh/interest-memory/internal/fork"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/vec"
+	"github.com/djasdh/interest-memory/internal/websearch"
 )
 
 // verifyResult is the LLM's JSON verdict for a single candidate.

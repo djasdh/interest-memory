@@ -6,6 +6,14 @@
 
 独立 Go 记忆服务：会话末从对话中提取兴趣点，经核查/清洗后写入 wiki 双链知识库；会话开始 RAG 召回注入上下文。支撑 Hermes 等消费 agent 的长期记忆。
 
+## 设计卖点
+
+- **轻量** — 单二进制（~19 MB，cgo 静态链接 sqlite-vec），空载内存 ~20–40 MB、流水线峰值 <75 MB（实测，见下方基准）；全部数据落在本地一个 SQLite 文件，无外部数据库
+- **自托管友好** — 一个二进制 + 一个配置文件即完整服务；无云依赖（LLM/embedding 走 OpenAI 兼容 `base_url`，可指向本地 Ollama/vLLM 等实现完全离线）；`scripts/install.sh` 引导安装 + systemd 自启
+- **严格记忆审计** — 每次结构化改动写入 `change_log`（标题 + 动作 + 结构性边），可追溯回放；证据定位到网页 URL / 会话轮次 / 检索 query；claims 提取 + 矛盾检测闭环
+- **主观性豁免** — 判断为「用户自身偏好/观点」的兴趣点跳过联网事实核查，但仍走 LLM 裁决，避免把主观倾向当事实写入
+- **渐进式披露** — 会话注入只给精简条目（`recall`：top_k + 分数门槛 + 截断），完整内容 + 边关系按需查（`memory_search`），最小化上下文污染
+
 ## 核心特性
 
 - **前缀窗口并行提取** — 每 5 个 user 回合一个前缀窗口步长（少于 5 不切分），并行分发提取，命中 DeepSeek/SiliconFlow 前缀缓存
@@ -15,6 +23,21 @@
 - **消费端查询** — `recall` 精简注入 + `memory_search`（完整内容 + 边关系）/ `memory_logs` 工具
 - **时间能力** — `session_date` 透传 → 事件时间 EventTime → recall 时间过滤（after/before/最近 N 天），支撑 LongMemEval temporal 评测
 - **完整审计** — change_log 记录每次结构化改动（标题 + 动作 + 结构性边）；tag 分类法（`ListTags` 聚合 + `wiki_tags` 工具）
+
+## 资源占用基准（实测）
+
+在单测工作流上实测（Go 1.26 + cgo，`scripts/e2e.sh` 全链路）：
+
+| 指标 | 数值 |
+|---|---|
+| 二进制大小 | ~19 MB（cgo 静态链接 sqlite-vec） |
+| 空载内存（无 job 待命） | ~20–40 MB RSS |
+| 流水线峰值内存 | <75 MB RSS（并行窗口 + 核查 + agent loop） |
+| 空库磁盘 | ~88 KB（SQLite 单文件） |
+| 初始占用 | ~20 MB（二进制 + 空库） |
+| 持续使用增长 | 实测约 1 周涨至 ~38 MB，主体为会话原文转录（~71%）；其余为向量索引 + 兴趣点/wiki 页 |
+
+宣传口径「50 MB 内存」对应**空载/典型**使用，峰值会到 ~75 MB；「20 MB 硬盘」为**初始**占用，后续随记忆与转录积累增长。可按需调低并行度（`fork.max_concurrency` / `verify.max_concurrency`）压低峰值内存；`session_transcripts` 保留全文原文，如需控制磁盘增长可在外部定期清理。
 
 ## 架构与数据流
 
@@ -37,7 +60,7 @@
 
 ## 快速开始
 
-**前置**：Go 1.22+、CGO（sqlite-vec 静态链接）、DeepSeek + SiliconFlow API key。
+**前置**：Go 1.25+、CGO（sqlite-vec 静态链接）、LLM + embedding API key。
 
 ```bash
 # 0. 一键安装（引导式向导：构建服务端 + 供应商配置 + 可选 agent bridge）
@@ -54,6 +77,10 @@ cp config.example.yaml config.yaml
 # 从环境变量提供密钥
 export LLM_API_KEY=...         # LLM 核查/提取/写入
 export SILICONFLOW_API_KEY=...  # embedding（BAAI/bge-m3, 1024 维）
+
+# 完全本地化：LLM/embedding 都走 OpenAI 兼容端点时，把 llm.base_url /
+# embedding.base_url 指向本地 Ollama / vLLM / LM Studio 等，即可零云端依赖运行。
+# 见 config.example.yaml 顶部示例。
 
 # 3. 运行（默认 :8899）
 ./server -config config.yaml

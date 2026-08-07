@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"interest-memory/internal/llm"
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/llm"
+	"github.com/djasdh/interest-memory/internal/store"
 
 	"github.com/djasdh/my-agent-core/agent"
 	"github.com/djasdh/my-agent-core/provider"

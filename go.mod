@@ -1,4 +1,4 @@
-module interest-memory
+module github.com/djasdh/interest-memory
 
 go 1.25.0
 

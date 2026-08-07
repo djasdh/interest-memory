@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/store"
 )
 
 // fakeProcessor records processed sessions and can inject an error.

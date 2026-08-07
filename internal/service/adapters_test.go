@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"interest-memory/internal/config"
-	"interest-memory/internal/websearch"
+	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/websearch"
 )
 
 // stubWebTool is a minimal websearch.Tool for registry tests.

@@ -16,6 +16,7 @@ type Fallback struct {
 	mu    sync.Mutex
 	ready bool
 }
+
 // NewFallback creates the keyword fallback store.
 func NewFallback(db *sql.DB) (*Fallback, error) {
 	f := &Fallback{db: db}
