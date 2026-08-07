@@ -23,6 +23,7 @@ config.local.yaml
 函数级调用图.md
 docs/superpowers/plans/
 docs/contradiction-quality-plan.md
+docs/*-audit.md
 
 # local build artifacts
 bin/
