@@ -173,10 +173,10 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 				"content":           map[string]any{"type": "string", "description": "Page content in markdown, may include [[wikilinks]] to other pages"},
 				"page_type":         map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
 				"status":            map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
-				"event_time":        map[string]any{"type": "string", "description": "事件发生时间（RFC3339，来自兴趣点的会话开始时间）"},
+				"event_time":        map[string]any{"type": "string", "description": "Event time (RFC3339, from the interest point's session start time)"},
 				"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
-				"tags":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "分类法标签（用 wiki_tags 查已有标签，优先复用）"},
-				"sources":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "来源：关键网页 URL 或现有页 id（主观兴趣点可省略）"},
+				"tags":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Taxonomy tags (look up existing tags with wiki_tags and reuse them)"},
+				"sources":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Sources: key web page URLs or existing page ids (may be omitted for subjective interest points)"},
 				"session_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
 				"edges": map[string]any{
 					"type":        "array",
@@ -539,8 +539,9 @@ type verifyResult struct {
 // NewVerifyClaimsTool returns the verify_claims tool: the agent calls it
 // during writing to fact-check a draft statement against the web. It gathers
 // web evidence (when a Searcher is wired) then asks the LLM for a verdict.
-// Degrades to a JSON unknown verdict rather than erroring.
-func NewVerifyClaimsTool(deps ToolsDeps) types.Tool {
+// Degrades to a JSON unknown verdict rather than erroring. lang is the output
+// language for the audit prompt.
+func NewVerifyClaimsTool(deps ToolsDeps, lang string) types.Tool {
 	return types.Tool{
 		Name:        "verify_claims",
 		Description: "Fact-check a statement against the web before writing it to the wiki. Use this for objective factual claims you are about to persist; returns a JSON verdict (supported/contested/unknown) with evidence. Subjective preferences do not need this.",
@@ -559,12 +560,12 @@ func NewVerifyClaimsTool(deps ToolsDeps) types.Tool {
 			if strings.TrimSpace(text) == "" {
 				return "", fmt.Errorf("verify_claims: missing 'text'")
 			}
-			return auditClaims(context.Background(), deps, text)
+			return auditClaims(context.Background(), deps, text, lang)
 		},
 	}
 }
 
-func auditClaims(ctx context.Context, deps ToolsDeps, text string) (string, error) {
+func auditClaims(ctx context.Context, deps ToolsDeps, text, lang string) (string, error) {
 	var evidence []websearch.SearchItem
 	if deps.Search != nil {
 		items, err := deps.Search.Search(ctx, text, 5)
@@ -578,6 +579,9 @@ func auditClaims(ctx context.Context, deps ToolsDeps, text string) (string, erro
 		return `{"status":"unknown","confidence":0,"evidence":[],"reason":"verify_claims: no LLM configured"}` + "\n", nil
 	}
 
+	if lang == "" {
+		lang = "English"
+	}
 	var b strings.Builder
 	b.WriteString("Judge whether the following statement is reliable based on web evidence (or general knowledge if none).\n\n")
 	b.WriteString("Statement: " + text + "\n")
@@ -597,6 +601,7 @@ Return ONLY valid JSON:
   "evidence": ["short reason 1", "short reason 2"],
   "reason": "one sentence verdict"
 }`)
+	b.WriteString(fmt.Sprintf("\n\nWrite evidence and reason in '%s'.\n", lang))
 
 	var vr verifyResult
 	if err := deps.LLM.ChatJSON(ctx, []llm.Message{{Role: "user", Content: b.String()}}, &vr); err != nil {

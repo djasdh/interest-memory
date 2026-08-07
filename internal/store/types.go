@@ -3,25 +3,27 @@ package store
 import "time"
 
 // EdgeType enumerates the five allowed edge kinds between wiki pages /
-// interest points (合并自 my-agent-core 的 4 种 + has_page 关联).
+// interest points (merged from my-agent-core's 4 kinds + the has_page link).
 type EdgeType string
 
 const (
-	EdgeRelated    EdgeType = "related"     // 一般关联
-	EdgeContradict EdgeType = "contradicts" // 矛盾（双向强制）
-	EdgeSequel     EdgeType = "sequel"      // 序列/演进
-	EdgeReference  EdgeType = "references"  // 引用/来源
-	EdgeHasPage    EdgeType = "has_page"    // 兴趣点 → wiki 页
+	EdgeRelated    EdgeType = "related"     // generic association
+	EdgeContradict EdgeType = "contradicts" // contradiction (enforced bidirectionally)
+	EdgeSequel     EdgeType = "sequel"      // sequence/evolution
+	EdgeReference  EdgeType = "references"  // reference/source
+	EdgeHasPage    EdgeType = "has_page"    // interest point → wiki page
 )
 
-// Reliability（可用度）— 贯穿兴趣点/claims，纠错层写入。
+// Reliability (trustworthiness) — carried by interest points/claims, written
+// by the correction layer.
 type Reliability struct {
 	Confidence float64    `json:"confidence"` // 0~1
 	Evidence   []Evidence `json:"evidence"`
 	Status     string     `json:"status"` // supported | contested | unknown
 }
 
-// Freshness（时效度）— 贯穿兴趣点/claims，纠错层维护。
+// Freshness (recency) — carried by interest points/claims, maintained by the
+// correction layer.
 type Freshness struct {
 	Level     string    `json:"level"` // fresh | aging | stale | unknown
 	UpdatedAt time.Time `json:"updated_at"`
@@ -32,11 +34,11 @@ type Freshness struct {
 // (turn range in a session, or a web URL + the query that surfaced it).
 type Evidence struct {
 	Kind       string    `json:"kind"`                  // session | page | manual | web
-	SourceID   string    `json:"source_id"`             // 追溯来源：session_id / page_id / URL
-	URL        string    `json:"url,omitempty"`         // 网络证据原文 URL
-	TurnRange  [2]int    `json:"turn_range,omitempty"`  // 会话内起止轮（1-indexed，0 表示未知）
-	Query      string    `json:"query,omitempty"`       // 触发该证据检索的 query
-	CapturedAt time.Time `json:"captured_at,omitempty"` // 证据采集时间
+	SourceID   string    `json:"source_id"`             // provenance: session_id / page_id / URL
+	URL        string    `json:"url,omitempty"`         // source URL for web evidence
+	TurnRange  [2]int    `json:"turn_range,omitempty"`  // in-session turn span (1-indexed, 0 = unknown)
+	Query      string    `json:"query,omitempty"`       // the search query that surfaced this evidence
+	CapturedAt time.Time `json:"captured_at,omitempty"` // when the evidence was captured
 	Excerpt    string    `json:"excerpt"`
 }
 
@@ -49,9 +51,9 @@ type InterestPoint struct {
 	Keywords       []string    `json:"keywords"`
 	Importance     float64     `json:"importance"`
 	Status         string      `json:"status"`     // active | archived
-	Subjective     bool        `json:"subjective"` // 主观观点/偏好标记（豁免联网核查）
-	TurnRange      [2]int      `json:"turn_range"` // 来源会话全局轮次 [start,end]
-	EventTime      time.Time   `json:"event_time"` // 事件发生时间（会话开始时间，session_date 兜底 received_at）
+	Subjective     bool        `json:"subjective"` // subjective preference/opinion flag (exempt from web fact-check)
+	TurnRange      [2]int      `json:"turn_range"` // source session's global turn range [start,end]
+	EventTime      time.Time   `json:"event_time"` // event time (session start; session_date with received_at fallback)
 	Reliability    Reliability `json:"reliability"`
 	Freshness      Freshness   `json:"freshness"`
 	FirstSeenAt    time.Time   `json:"first_seen_at"`
@@ -76,11 +78,11 @@ type Page struct {
 	AgentID   string    `json:"agent_id"`
 	PageType  PageType  `json:"page_type"`
 	Title     string    `json:"title"`
-	BodyMD    string    `json:"body_md"`           // markdown，含 [[wikilink]]
-	Status    string    `json:"status"`            // active | superseded | archived（"" 视为 active）
-	Tags      []string  `json:"tags,omitempty"`    // 分类法标签
-	Sources   []string  `json:"sources,omitempty"` // 来源：网页 URL 或现有页 id（主观性豁免可空）
-	EventTime time.Time `json:"event_time"`        // 事件发生时间（会话开始时间）
+	BodyMD    string    `json:"body_md"`           // markdown, may contain [[wikilink]]
+	Status    string    `json:"status"`            // active | superseded | archived ("" treated as active)
+	Tags      []string  `json:"tags,omitempty"`    // taxonomy tags
+	Sources   []string  `json:"sources,omitempty"` // sources: web page URLs or existing page ids (may be empty for subjective points)
+	EventTime time.Time `json:"event_time"`        // event time (session start)
 	Claims    []Claim   `json:"claims"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -102,7 +104,7 @@ type PendingLink struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Claim is a structured belief with evidence (纠错层核心）。
+// Claim is a structured belief with evidence (core of the correction layer).
 type Claim struct {
 	ID         string     `json:"id"`
 	AgentID    string     `json:"agent_id"`
@@ -140,8 +142,8 @@ type Transcript struct {
 	AgentID     string     `json:"agent_id"`
 	TurnCount   int        `json:"turn_count"`
 	RawTurns    string     `json:"raw_turns"`              // JSON: [{role, content}]
-	ReceivedAt  time.Time  `json:"received_at"`            // 服务端接收时间
-	SessionDate *time.Time `json:"session_date,omitempty"` // 透传的会话开始时间（RFC3339，可空）
+	ReceivedAt  time.Time  `json:"received_at"`            // server receive time
+	SessionDate *time.Time `json:"session_date,omitempty"` // passed-through session start time (RFC3339, nullable)
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
 

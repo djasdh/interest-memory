@@ -58,8 +58,8 @@ export async function ingest(cfg, sessionID, turns, sessionDate) {
 
 /**
  * Reduce a Reasonix session jsonl (`{role, content}` per line, OpenAI chat
- * format) to `[{role, content}]` wire turns. system/user/assistant kept; the
- * wire format only wants user/assistant.
+ * format) to `[{role, content}]` wire turns. The wire format only wants
+ * user/assistant; system and tool messages are dropped.
  */
 export function parseReasonixTranscript(path) {
   const out = []

@@ -157,7 +157,7 @@ echo "stats: $STATS"
 [[ "$IP_COUNT" -gt 0 ]] || die "expected >0 interest_points"
 [[ "$PG_COUNT" -gt 0 ]] || die "expected >0 wiki_pages (agent loop should write pages)"
 
-# recall must return non-empty bare text (no <memory-context> fence)
+# recall must return a non-empty memory_context (JSON-wrapped, no <memory-context> fence)
 RECALL=$(curl -sf "$BASE/api/v1/agent-a/recall?query=PostgreSQL" 2>/dev/null || curl -sf --get "$BASE/api/v1/agent-a/recall" --data-urlencode "query=PostgreSQL")
 CTX=$(printf '%s' "$RECALL" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("memory_context",""))')
 echo "recall query=PostgreSQL -> ${CTX:0:200}"

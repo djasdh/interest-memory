@@ -75,7 +75,7 @@ func TestVerifyClaimsToolAuditsText(t *testing.T) {
 	deps.Search = se
 	deps.LLM = l
 
-	tool := NewVerifyClaimsTool(deps)
+	tool := NewVerifyClaimsTool(deps, "English")
 	if tool.Name != "verify_claims" {
 		t.Errorf("tool name = %q, want verify_claims", tool.Name)
 	}
@@ -103,7 +103,7 @@ func TestVerifyClaimsToolDegradesWithoutSearch(t *testing.T) {
 	l := &fakeLLM{resp: map[string]any{"status": "unknown"}}
 	deps.LLM = l
 
-	tool := NewVerifyClaimsTool(deps)
+	tool := NewVerifyClaimsTool(deps, "English")
 	out, err := tool.Execute(types.Context{}, types.ArgsMap{"text": "某个说法"}, nil)
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -141,7 +141,7 @@ func TestReviewToolSuggestsAgainstExisting(t *testing.T) {
 	}}
 	deps.LLM = l
 
-	tool := NewReviewTool(deps, "a")
+	tool := NewReviewTool(deps, "a", "English")
 	if tool.Name != "review" {
 		t.Errorf("tool name = %q, want review", tool.Name)
 	}
@@ -176,7 +176,7 @@ func TestReviewToolSuggestsAgainstExisting(t *testing.T) {
 
 func TestReviewToolDegradesWithoutLLM(t *testing.T) {
 	deps, _, _ := newTestDeps(t)
-	tool := NewReviewTool(deps, "a")
+	tool := NewReviewTool(deps, "a", "English")
 	out, err := tool.Execute(types.Context{}, types.ArgsMap{"draft": "x"}, nil)
 	if err != nil {
 		t.Fatalf("expected degraded no-error, got %v", err)
@@ -401,7 +401,7 @@ func TestReviewToolInjectsTagsSourcesAndLinkCount(t *testing.T) {
 	l := &fakeLLM{resp: map[string]any{"summary": "ok", "suggestions": []any{}}}
 	deps.LLM = l
 
-	tool := NewReviewTool(deps, "agent-a")
+	tool := NewReviewTool(deps, "agent-a", "English")
 	// Draft without any wikilink.
 	if _, err := tool.Execute(types.Context{}, types.ArgsMap{"draft": "PostgreSQL 作为默认数据库"}, nil); err != nil {
 		t.Fatal(err)
@@ -578,7 +578,7 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWriter(deps, nil, "中文")
+	w := NewWriter(deps, nil, "English")
 	if err := w.RebuildEdges(ctx, "agent-a"); err != nil {
 		t.Fatalf("RebuildEdges: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestBuildCompilePrompt(t *testing.T) {
 		Subjective:  false,
 		TurnRange:   [2]int{0, 0},
 		Reliability: store.Reliability{Confidence: 0.9, Status: "supported"},
-	}, "", "")
+	}, "", "", "English")
 	if prompt == "" {
 		t.Fatal("empty prompt")
 	}

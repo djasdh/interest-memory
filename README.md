@@ -87,7 +87,7 @@ namespaces:
 - `isolated`：每个 agent 只读自己的记忆（默认，无配置即现状）
 - `all`：每个 agent 读取所有命名空间（服务端动态发现全集）
 - `custom`：按 `visible_to` 单向声明（A 可读 B，B 不自动读 A）
-- 互通时结果标注来源：`recall` 文本行尾 `[来源: <agent>]`，`search`/`get` 的 `result.agent` 字段
+- 互通时结果标注来源：`recall` 文本行尾 `[from: <agent>]`，`search`/`get` 的 `result.agent` 字段
 - `logs` / `stats` 始终归属本空间，不参与互通
 
 ## Hermes 接入

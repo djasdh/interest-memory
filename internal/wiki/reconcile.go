@@ -19,40 +19,42 @@ type ReconcileInput struct {
 }
 
 // ArchivedInfo is an archived interest point with the detail the reconcile
-// stage needs: its title, its outbound edges (原本出边), and — when it was
-// superseded rather than deleted — the live replacement id/title (替代链路).
+// stage needs: its title, its outbound edges (original outlinks), and — when
+// it was superseded rather than deleted — the live replacement id/title
+// (replacement chain).
 type ArchivedInfo struct {
 	ID               string
 	Title            string
 	Outlinks         []store.Edge
 	ReplacementID    string
 	ReplacementTitle string
-	Superseded       bool // true: 替代链路 (sequel) 存在；false: 纯删除
+	Superseded       bool // true: replacement chain (sequel) exists; false: pure deletion
 }
 
 // reconcileSystem guides the unified reconcile agent loop: it propagates a
-// structural change to related pages (级联归档 / 矛盾闭环 / 内容协同). It runs
-// WITHOUT review — the changes are executed directly.
-const reconcileSystem = `你是一个 wiki 协同编辑助手。某个页面或兴趣点刚刚发生了结构性变更，你需要统一修改与其相关的 wiki 页面，保持知识库自洽。
-规则：
-- 用 wiki_query 查询相关页，用 wiki_write 修改（可传 status 参数，如 superseded/archived）
-- 级联归档：被取代/推翻的旧页应标记 status=superseded（必要时删除其引用），不再作为当前知识
-- 替代替换：若本次变更是"替代"，相关页中引用被替代旧点的内容应静默更新为替代者（新点）的最新事实
-- 删除清理：若本次变更是"删除"，相关页中仍引用已归档旧点的内容应移除或修正，避免残留失效知识
-- 矛盾闭环：若某相关页与变更后的事实直接矛盾，修正或标记其状态
-- 内容协同：相关页中提到已变化内容的地方应更新为最新事实
-- 不要新增与本次变更无关的页面
-- 输出简洁，直接执行修改`
+// structural change to related pages (cascade archive / contradiction closure
+// / content sync). It runs WITHOUT review — the changes are executed directly.
+const reconcileSystem = `You are a wiki co-editing assistant. A page or interest point just underwent a structural change; you must uniformly update the related wiki pages to keep the knowledge base self-consistent.
+Rules:
+- Use wiki_query to find related pages and wiki_write to modify them (status may be passed, e.g. superseded/archived)
+- Cascade archive: pages superseded/overthrown by this change should be marked status=superseded (delete their references when needed); they are no longer current knowledge
+- Replacement substitution: if this change is a "replacement", content in related pages that references the superseded old point should be silently updated to the successor (new point)'s latest facts
+- Deletion cleanup: if this change is a "deletion", content in related pages that still references the archived old point should be removed or corrected to avoid stale knowledge
+- Contradiction closure: if a related page directly contradicts the changed facts, correct it or mark its status
+- Content sync: places in related pages that mention the changed content should be updated to the latest facts
+- Do not create pages unrelated to this change
+- Output concise, execute the edits directly`
 
 // ReconcileRelated propagates a structural change to related wiki pages
 // within maxHops hops (default 3). It collects the related-page subgraph
 // (outlinks/backlinks/has_page), then dispatches batches of up to batchSize
 // pages to a unified agent loop (wiki_query + wiki_write only — no review)
-// that performs 级联归档 / 矛盾闭环 / 内容协同. Archived interest points are
-// classified as superseded (有 sequel 替代链路) or deleted (纯归档): the
-// superseded ones get a code-level fallback substitution (marking the old
-// concept page superseded and rewriting [[wikilinks]]) plus a prompt hint;
-// deleted ones only surface their 原本出边 in the prompt.
+// that performs cascade archive / contradiction closure / content sync.
+// Archived interest points are classified as superseded (has a sequel
+// replacement link) or deleted (pure archive): the superseded ones get a
+// code-level fallback substitution (marking the old concept page superseded
+// and rewriting [[wikilinks]]) plus a prompt hint; deleted ones only surface
+// their original outlinks in the prompt.
 func (w *Writer) ReconcileRelated(ctx context.Context, agentID string, in ReconcileInput, maxHops, batchSize int) error {
 	if maxHops <= 0 {
 		maxHops = 3
@@ -75,7 +77,7 @@ func (w *Writer) ReconcileRelated(ctx context.Context, agentID string, in Reconc
 		return nil
 	}
 
-	// Resolve archived-point detail (title + 原本出边 + 替代链路).
+	// Resolve archived-point detail (title + original outlinks + replacement chain).
 	archived := w.resolveArchived(ctx, agentID, in.ArchivedPoints)
 	// Code-level fallback substitution for superseded points.
 	if err := w.applyCodeFallback(ctx, agentID, archived); err != nil {
@@ -86,15 +88,15 @@ func (w *Writer) ReconcileRelated(ctx context.Context, agentID string, in Reconc
 	if err != nil {
 		return fmt.Errorf("wiki: reconcile: collect: %w", err)
 	}
-	// 三跳内无内容：为空或全部已归档 → 静默提示，不跑 LLM。
+	// Nothing within 3 hops: empty or all archived → log silently, no LLM run.
 	if len(related) == 0 || allArchived(related) {
-		reason := "三跳内无相关内容"
+		reason := "no related content within 3 hops"
 		if len(related) > 0 {
-			reason = "三跳内相关页面均已归档"
+			reason = "all related pages within 3 hops are already archived"
 		}
-		log.Printf("归档补链: 静默提示 %s (agent=%s archived=%d)", reason, agentID, len(archived))
+		log.Printf("reconcile: silent skip %s (agent=%s archived=%d)", reason, agentID, len(archived))
 		for _, a := range archived {
-			log.Printf("归档补链: %s", describeArchived(a))
+			log.Printf("reconcile: %s", describeArchived(a))
 		}
 		return nil
 	}
@@ -105,7 +107,7 @@ func (w *Writer) ReconcileRelated(ctx context.Context, agentID string, in Reconc
 		if end > len(related) {
 			end = len(related)
 		}
-		prompt := buildReconcilePrompt(in, archived, related[start:end])
+		prompt := buildReconcilePrompt(in, archived, related[start:end], w.lang)
 		loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
 		err := w.runLoop(loopCtx, p, reconcileSystem, tools, types.Message{Role: types.RoleUser, Text: prompt}, func(types.Event) {})
 		cancel()
@@ -143,8 +145,8 @@ func (w *Writer) resolveArchived(ctx context.Context, agentID string, ids []stri
 	return out
 }
 
-// applyCodeFallback performs the code-level 静默替换 for superseded archived
-// points: marks the old concept page superseded and rewrites backlink
+// applyCodeFallback performs the code-level silent substitution for superseded
+// archived points: marks the old concept page superseded and rewrites backlink
 // wikilinks from the old page to its successor page.
 func (w *Writer) applyCodeFallback(ctx context.Context, agentID string, archived []ArchivedInfo) error {
 	for _, a := range archived {
@@ -218,22 +220,22 @@ func allArchived(pages []store.Page) bool {
 
 // describeArchived renders one archived point for the stdout log.
 func describeArchived(a ArchivedInfo) string {
-	parts := []string{fmt.Sprintf("已归档 %s", a.ID)}
+	parts := []string{fmt.Sprintf("archived %s", a.ID)}
 	if a.Title != "" {
-		parts = append(parts, "「"+a.Title+"」")
+		parts = append(parts, fmt.Sprintf("%q", a.Title))
 	}
 	if a.Superseded {
 		rep := a.ReplacementID
 		if a.ReplacementTitle != "" {
-			rep = fmt.Sprintf("%s 「%s」", a.ReplacementID, a.ReplacementTitle)
+			rep = fmt.Sprintf("%s (%q)", a.ReplacementID, a.ReplacementTitle)
 		}
-		parts = append(parts, "替代链路: "+a.ID+" → "+rep)
+		parts = append(parts, "replacement chain: "+a.ID+" → "+rep)
 	} else {
 		outs := make([]string, 0, len(a.Outlinks))
 		for _, e := range a.Outlinks {
 			outs = append(outs, fmt.Sprintf("%s→%s", e.Kind, e.TargetID))
 		}
-		parts = append(parts, "原本出边: ["+strings.Join(outs, ", ")+"]")
+		parts = append(parts, "original outlinks: ["+strings.Join(outs, ", ")+"]")
 	}
 	return strings.Join(parts, " ")
 }
@@ -296,38 +298,42 @@ func (w *Writer) collectRelated(ctx context.Context, agentID string, seeds []str
 
 // buildReconcilePrompt renders the change summary (including archived-point
 // replacement links / outlinks) and the related-page batch for the reconcile
-// agent loop.
-func buildReconcilePrompt(in ReconcileInput, archived []ArchivedInfo, batch []store.Page) string {
+// agent loop. lang is the output language instruction appended at the end.
+func buildReconcilePrompt(in ReconcileInput, archived []ArchivedInfo, batch []store.Page, lang string) string {
+	if lang == "" {
+		lang = "English"
+	}
 	var b strings.Builder
-	b.WriteString("以下是本次结构性变更及需要协同处理的相关页面，请统一修改。\n\n")
-	b.WriteString("## 本次变更\n")
+	b.WriteString("The following structural change happened and the related pages below need coordinated updates. Apply the edits uniformly.\n\n")
+	b.WriteString("## This change\n")
 	if len(in.TouchedPages) > 0 {
-		b.WriteString(fmt.Sprintf("- 写入/更新页面: %s\n", strings.Join(in.TouchedPages, ", ")))
+		b.WriteString(fmt.Sprintf("- Pages written/updated: %s\n", strings.Join(in.TouchedPages, ", ")))
 	}
 	for _, a := range archived {
 		if a.Superseded {
 			rep := a.ReplacementID
 			if a.ReplacementTitle != "" {
-				rep = fmt.Sprintf("%s（%s）", a.ReplacementID, a.ReplacementTitle)
+				rep = fmt.Sprintf("%s (%s)", a.ReplacementID, a.ReplacementTitle)
 			}
-			b.WriteString(fmt.Sprintf("- 替代: 已归档兴趣点 %s（%s），替代链路为 %s → %s，相关页面中引用旧点的内容应静默替换为新点\n",
+			b.WriteString(fmt.Sprintf("- Replacement: archived interest point %s (%s); the replacement chain is %s → %s, so content in related pages referencing the old point should be silently replaced with the new point\n",
 				a.ID, a.Title, a.ID, rep))
 		} else {
 			outs := make([]string, 0, len(a.Outlinks))
 			for _, e := range a.Outlinks {
 				outs = append(outs, fmt.Sprintf("%s→%s", e.Kind, e.TargetID))
 			}
-			b.WriteString(fmt.Sprintf("- 删除: 已归档兴趣点 %s（%s），原本出边: [%s]，相关页面中引用它的内容应移除或修正\n",
+			b.WriteString(fmt.Sprintf("- Deletion: archived interest point %s (%s); original outlinks: [%s]; content in related pages referencing it should be removed or corrected\n",
 				a.ID, a.Title, strings.Join(outs, ", ")))
 		}
 	}
-	b.WriteString("\n## 需要协同处理的相关页面\n")
+	b.WriteString("\n## Related pages to update\n")
 	for i, p := range batch {
 		b.WriteString(fmt.Sprintf("%d. [%s] %s (type=%s status=%s)\n", i+1, p.ID, p.Title, p.PageType, p.Status))
 		if p.BodyMD != "" {
 			b.WriteString(fmt.Sprintf("   Preview: %s\n", truncate(p.BodyMD, 300)))
 		}
 	}
-	b.WriteString("\n请用 wiki_query 确认后，用 wiki_write 完成级联归档、替代替换、矛盾闭环与内容协同。\n")
+	b.WriteString("\nConfirm with wiki_query, then use wiki_write to complete cascade archive, replacement substitution, contradiction closure, and content sync.\n")
+	b.WriteString(fmt.Sprintf("Write all page content (title, body, related links) in '%s'.\n", lang))
 	return b.String()
 }

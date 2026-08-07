@@ -121,8 +121,8 @@ func TestReconcileBatchesOverTen(t *testing.T) {
 func TestReconcilePromptMentionsChanges(t *testing.T) {
 	in := ReconcileInput{TouchedPages: []string{"page-a"}, ArchivedPoints: []string{"ip-1"}}
 	batch := []store.Page{{ID: "page-b", Title: "B", Status: "active", BodyMD: "old"}}
-	prompt := buildReconcilePrompt(in, []ArchivedInfo{{ID: "ip-1", Title: "旧点", Superseded: true, ReplacementID: "ip-2", ReplacementTitle: "新点"}}, batch)
-	for _, want := range []string{"page-a", "ip-1", "ip-2", "page-b", "替代"} {
+	prompt := buildReconcilePrompt(in, []ArchivedInfo{{ID: "ip-1", Title: "旧点", Superseded: true, ReplacementID: "ip-2", ReplacementTitle: "新点"}}, batch, "English")
+	for _, want := range []string{"page-a", "ip-1", "ip-2", "page-b", "Replacement"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("reconcile prompt missing %q\n---\n%s", want, prompt)
 		}
@@ -140,8 +140,8 @@ func TestReconcilePromptDeleteShowsOutlinks(t *testing.T) {
 			{SourceID: "ip-1", TargetID: "ip-2", Kind: store.EdgeRelated},
 		},
 	}}
-	prompt := buildReconcilePrompt(in, archived, batch)
-	for _, want := range []string{"删除", "ip-1", "has_page→page-x", "related→ip-2"} {
+	prompt := buildReconcilePrompt(in, archived, batch, "English")
+	for _, want := range []string{"Deletion", "ip-1", "has_page→page-x", "related→ip-2"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("delete reconcile prompt missing %q\n---\n%s", want, prompt)
 		}
@@ -162,11 +162,11 @@ func TestAllArchived(t *testing.T) {
 
 func TestDescribeArchived(t *testing.T) {
 	s := describeArchived(ArchivedInfo{ID: "ip-1", Title: "旧", Superseded: true, ReplacementID: "ip-2", ReplacementTitle: "新"})
-	if !strings.Contains(s, "替代链路") || !strings.Contains(s, "ip-1") || !strings.Contains(s, "ip-2") {
+	if !strings.Contains(s, "replacement chain") || !strings.Contains(s, "ip-1") || !strings.Contains(s, "ip-2") {
 		t.Errorf("superseded describe missing replacement chain: %q", s)
 	}
 	d := describeArchived(ArchivedInfo{ID: "ip-1", Outlinks: []store.Edge{{TargetID: "p1", Kind: store.EdgeHasPage}}})
-	if !strings.Contains(d, "原本出边") || !strings.Contains(d, "p1") {
+	if !strings.Contains(d, "original outlinks") || !strings.Contains(d, "p1") {
 		t.Errorf("deleted describe missing outlinks: %q", d)
 	}
 }

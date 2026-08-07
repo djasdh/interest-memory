@@ -4,13 +4,15 @@ server:
   db_path: ~/.interest-memory/memory.db
 
 # 侧 LLM（分叉提取 / 纠错核查）——完全可配，base_url/key/model 独立于 embedding
+# Side LLM (fork extraction / correction fact-check) — fully configurable; base_url/key/model independent of embedding
 llm:
   base_url: https://api.openai.com/v1
-  api_key_env: LLM_API_KEY      # 从环境变量取密钥
+  api_key_env: LLM_API_KEY      # 从环境变量取密钥 | API key from env var
   model: gpt-4o-mini
   max_tokens: 4096
 
 # embedding —— 完全可配，独立于 llm。默认 SiliconFlow 免费模型 BAAI/bge-m3（固定 1024 维）
+# embedding — fully configurable, independent of llm. Default: SiliconFlow free model BAAI/bge-m3 (fixed 1024 dims)
 embedding:
   base_url: https://api.siliconflow.cn/v1
   api_key_env: SILICONFLOW_API_KEY
@@ -18,55 +20,63 @@ embedding:
   dimensions: 1024
 
 # 分叉分析（会话末按 user 回合的前缀窗口）
+# Fork analysis (prefix windows over user turns at session end)
 fork:
-  prefix_step: 5                # 每 5 个 user 回合为一个前缀窗口步长（少于 5 不切分）
-  max_windows: 8                # 前缀窗口上限（超限保留最长的 N 个）
-  max_concurrency: 4            # 窗口提取并行度
-  similarity_merge: 0.85        # 与历史兴趣点去重合并阈值
-  similarity_relate: 0.50       # 关联建边阈值
-  importance_boost_per_seen: 0.05  # 每次再见到时的 importance 增幅
+  prefix_step: 5                # 每 5 个 user 回合为一个前缀窗口步长（少于 5 不切分）| prefix-window step every 5 user turns (no split below 5)
+  max_windows: 8                # 前缀窗口上限（超限保留最长的 N 个）| max prefix windows (keeps the longest N when exceeded)
+  max_concurrency: 4            # 窗口提取并行度 | window-extraction parallelism
+  similarity_merge: 0.85        # 与历史兴趣点去重合并阈值 | dedup/merge threshold against historical interest points
+  similarity_relate: 0.50       # 关联建边阈值 | relate-edge threshold
+  importance_boost_per_seen: 0.05  # 每次再见到时的 importance 增幅 | importance bump each time it is seen again
   max_candidates_per_window: 20
-  min_confidence: 0.3              # 候选兴趣点置信度下限（对齐 my-agent-core 0.3 阈值）
+  min_confidence: 0.3              # 候选兴趣点置信度下限（对齐 my-agent-core 0.3 阈值）| min candidate confidence (aligned with my-agent-core 0.3)
 
 # 纠错核查（verify#1）
+# Correction fact-check (verify#1)
 verify:
-  use_web_search: true           # 是否用网络工具做事实核查（失败降级不阻断）
-  search_max: 5                  # 每个候选的最大搜索结果数
-  web_tool: myagent              # 网络工具名（registry 中 active；默认 myagent=my-agent-core 12 provider）
-  max_concurrency: 4             # 候选核查并行度
-  min_confidence: 0              # 矛盾入库最低置信度（0~1；0=禁用，默认禁用）
-  sim_threshold: 0.45            # 语义归组相似度阈值（同话题候选门槛）
-  max_candidates: 30             # 语义归组每窗口候选对上限（超出按相似度降序截断）
+  use_web_search: true           # 是否用网络工具做事实核查（失败降级不阻断）| whether to fact-check via web tools (degrades on failure, non-blocking)
+  search_max: 5                  # 每个候选的最大搜索结果数 | max search results per candidate
+  web_tool: myagent              # 网络工具名（registry 中 active；默认 myagent=my-agent-core 12 provider）| web tool name (active in registry; default myagent = my-agent-core 12 providers)
+  max_concurrency: 4             # 候选核查并行度 | candidate fact-check parallelism
+  min_confidence: 0              # 矛盾入库最低置信度（0~1；0=禁用，默认禁用）| min contradiction confidence to store (0~1; 0 = disabled, default)
+  sim_threshold: 0.45            # 语义归组相似度阈值（同话题候选门槛）| semantic-grouping similarity threshold (same-topic gate)
+  max_candidates: 30             # 语义归组每窗口候选对上限（超出按相似度降序截断）| max candidate pairs per window for semantic grouping (truncated by descending similarity)
 
 # wiki 写入与相关页协同
+# Wiki writing and related-page reconciliation
 wiki:
-  max_hops: 3                    # 协同图传播深度（至多 3 跳）
-  batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）
-  language: 中文                  # 页面输出语言（默认中文）
+  max_hops: 3                    # 协同图传播深度（至多 3 跳）| graph propagation depth (up to 3 hops)
+  batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）| related pages per reconcile agent-loop batch (auto-batched when exceeded)
+  language: English              # 页面输出语言（默认英文）| page output language (default English)
 
 # RAG 召回
+# RAG recall
 recall:
   top_k: 8
   include_wiki: true
   min_score: 0.30
 
 # 消费侧查询工具（memory_search）
+# Consumer-side query tool (memory_search)
 search:
-  top_k: 3                    # 语义检索默认返回数
-  max_body_len: 4000          # 正文/摘要截断上限（claims/evidence/边不截断）
+  top_k: 3                    # 语义检索默认返回数 | default number of semantic-search results
+  max_body_len: 4000          # 正文/摘要截断上限（claims/evidence/边不截断）| body/summary truncation cap (claims/evidence/edges not truncated)
 
 # 改动日志（change_log）
+# Change log (change_log)
 log:
-  retain: 0                   # 每 agent 保留日志条数上限（0=无限增长）
+  retain: 0                   # 每 agent 保留日志条数上限（0=无限增长）| retained log entries per agent (0 = unlimited)
 
 # 命名空间互通（读侧；写入始终隔离）。默认 isolated：每个 agent 只读自己的记忆。
-#   isolated — 不互通（默认）
-#   all      — 每个 agent 可读取所有命名空间（服务端动态发现）
-#   custom   — 按 visible_to 单向声明：agent → 可读取的命名空间列表
+# Cross-namespace visibility (read side; writes always isolated). Default isolated: each agent reads only its own memory.
+#   isolated — 不互通（默认）| no sharing (default)
+#   all      — 每个 agent 可读取所有命名空间（服务端动态发现）| each agent reads all namespaces (server-side dynamic discovery)
+#   custom   — 按 visible_to 单向声明：agent → 可读取的命名空间列表 | per-agent one-way declaration via visible_to: agent → readable namespaces
 # 互通时 recall/search/get 的结果会标注来源命名空间（[来源: <agent>] / result.agent）。
+# When enabled, recall/search/get results are annotated with the source namespace ([from: <agent>] / result.agent).
 namespaces:
   mode: isolated
-  # visible_to:                # 仅 custom 模式生效
+  # visible_to:                # 仅 custom 模式生效 | only effective in custom mode
   #   codex: [opencode, pi]
   #   claudecode: [reasonix]
 

@@ -28,7 +28,7 @@ type claimExtract struct {
 func (s *service) CheckClaims(ctx context.Context, agentID string, pts []store.InterestPoint) ([]store.Claim, error) {
 	var out []store.Claim
 	for _, p := range pts {
-		prompt := buildClaimsPrompt(p)
+		prompt := buildClaimsPrompt(p, s.cfg.Language)
 		var ex claimExtract
 		if err := s.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &ex); err != nil {
 			// Degraded: derive a single claim from the summary.
@@ -76,7 +76,7 @@ func (s *service) CheckClaims(ctx context.Context, agentID string, pts []store.I
 	return out, nil
 }
 
-func buildClaimsPrompt(p store.InterestPoint) string {
+func buildClaimsPrompt(p store.InterestPoint, lang string) string {
 	var b strings.Builder
 	b.WriteString("Extract the factual claims implied by this interest point. Return ONLY valid JSON.\n\n")
 	b.WriteString(fmt.Sprintf("Topic: %s\nSummary: %s\nReliability: confidence=%.2f status=%s\n",
@@ -92,6 +92,7 @@ func buildClaimsPrompt(p store.InterestPoint) string {
     }
   ]
 }`)
+	b.WriteString(fmt.Sprintf("\n\nWrite all claim text and evidence in '%s'.\n", lang))
 	return b.String()
 }
 
@@ -254,26 +255,15 @@ func (s *service) buildContradictionPrompt(claims []store.Claim) string {
 	var b strings.Builder
 	lang := s.cfg.Language
 	if lang == "" {
-		lang = "中文"
+		lang = "English"
 	}
-	switch lang {
-	case "中文", "chinese", "zh", "zh-cn", "zh_cn", "zh-CN":
-		b.WriteString("下面是记忆 wiki 中的 claim。找出彼此直接矛盾的候选对。\n")
-		b.WriteString("规则：\n")
-		b.WriteString("- 把所有【疑似】矛盾的对都放进 contradictions 数组；每条必须标注 is_contradiction（是否真矛盾）和 confidence（0~1 确信度）。\n")
-		b.WriteString("- 话题无关的两条 claim 不算矛盾（例如“PostgreSQL 的部署方式”与“Python 的语法”），不要包含这类对。\n")
-		b.WriteString("- 反例：“MySQL 更快”与“SQLite 更快”都用了“更快”，但主题不同，不是矛盾，不要放入。\n")
-		b.WriteString("- description 用「" + lang + "」撰写。\n")
-		b.WriteString("只返回合法 JSON。\n\n")
-	default:
-		b.WriteString("Below are claims from a memory wiki. Identify candidate pairs that may contradict each other.\n")
-		b.WriteString("Rules:\n")
-		b.WriteString("- Put ALL suspicious pairs into the contradictions array; each entry must carry is_contradiction (true/false) and confidence (0~1).\n")
-		b.WriteString("- Claims on unrelated topics are NOT contradictions (e.g. 'PostgreSQL deployment' vs 'Python syntax'); do not include such pairs.\n")
-		b.WriteString("- Counter-example: 'MySQL is faster' vs 'SQLite is faster' both say 'faster' but differ in subject; not a contradiction, do not include.\n")
-		b.WriteString("- Write description in '" + lang + "'.\n")
-		b.WriteString("Return ONLY valid JSON.\n\n")
-	}
+	b.WriteString("Below are claims from a memory wiki. Identify candidate pairs that may contradict each other.\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- Put ALL suspicious pairs into the contradictions array; each entry must carry is_contradiction (true/false) and confidence (0~1).\n")
+	b.WriteString("- Claims on unrelated topics are NOT contradictions (e.g. 'PostgreSQL deployment' vs 'Python syntax'); do not include such pairs.\n")
+	b.WriteString("- Counter-example: 'MySQL is faster' vs 'SQLite is faster' both say 'faster' but differ in subject; not a contradiction, do not include.\n")
+	b.WriteString(fmt.Sprintf("- Write description in '%s'.\n", lang))
+	b.WriteString("Return ONLY valid JSON.\n\n")
 	for i, c := range claims {
 		b.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, c.ID, c.Text))
 	}
@@ -300,28 +290,16 @@ func (s *service) buildCandidatePrompt(group []store.Claim, cands []candidatePai
 	var b strings.Builder
 	lang := s.cfg.Language
 	if lang == "" {
-		lang = "中文"
+		lang = "English"
 	}
-	switch lang {
-	case "中文", "chinese", "zh", "zh-cn", "zh_cn", "zh-CN":
-		b.WriteString("下面是从记忆 wiki 中选出的候选对（两两可能同话题）。判定哪些候选对是真正的矛盾。\n")
-		b.WriteString("规则：\n")
-		b.WriteString("- 只判定下列候选对，不要新增或修改任何对。\n")
-		b.WriteString("- 每条必须标注 is_contradiction（是否真矛盾）和 confidence（0~1 确信度）。\n")
-		b.WriteString("- 若两条其实话题无关或不算矛盾，is_contradiction=false。\n")
-		b.WriteString("- left_text/right_text 必须逐字复制下方引号内的文本。\n")
-		b.WriteString("- description 用「" + lang + "」撰写。\n")
-		b.WriteString("只返回合法 JSON。\n\n")
-	default:
-		b.WriteString("Below are pre-filtered candidate pairs from a memory wiki (each pair may be about the same topic). Judge which pairs are true contradictions.\n")
-		b.WriteString("Rules:\n")
-		b.WriteString("- Judge ONLY the pairs listed below; do not add or modify any pair.\n")
-		b.WriteString("- Each entry must carry is_contradiction (true/false) and confidence (0~1).\n")
-		b.WriteString("- If two claims are actually unrelated or not contradictory, set is_contradiction=false.\n")
-		b.WriteString("- left_text/right_text must be copied verbatim from the quoted texts below.\n")
-		b.WriteString("- Write description in '" + lang + "'.\n")
-		b.WriteString("Return ONLY valid JSON.\n\n")
-	}
+	b.WriteString("Below are pre-filtered candidate pairs from a memory wiki (each pair may be about the same topic). Judge which pairs are true contradictions.\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- Judge ONLY the pairs listed below; do not add or modify any pair.\n")
+	b.WriteString("- Each entry must carry is_contradiction (true/false) and confidence (0~1).\n")
+	b.WriteString("- If two claims are actually unrelated or not contradictory, set is_contradiction=false.\n")
+	b.WriteString("- left_text/right_text must be copied verbatim from the quoted texts below.\n")
+	b.WriteString(fmt.Sprintf("- Write description in '%s'.\n", lang))
+	b.WriteString("Return ONLY valid JSON.\n\n")
 	for k, c := range cands {
 		b.WriteString(fmt.Sprintf("%d. \"%s\" ↔ \"%s\"\n", k+1, group[c.i].Text, group[c.j].Text))
 	}

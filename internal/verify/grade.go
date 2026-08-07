@@ -97,7 +97,7 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 }
 
 // FeedbackWrite closes the loop: for each recalled interest-point hit, bump
-// seen_count / importance / freshness timestamps (再次写入闭环).
+// seen_count / importance / freshness timestamps (write-back feedback loop).
 func (s *service) FeedbackWrite(ctx context.Context, agentID string, hits []vec.Hit) error {
 	for _, h := range hits {
 		if h.Kind != "interest_point" {

@@ -5,8 +5,8 @@ Bridges Hermes conversations to the local interest-memory service via REST:
   * ``prefetch(query)``  → GET  /api/v1/{agent}/recall  (session-start recall)
   * ``on_session_end()`` → POST /api/v1/{agent}/sessions (session-end ingest)
 
-The memory backend does the heavy lifting (fork/verify/interest/wiki/recall,
-design §五). This provider is a thin HTTP adapter: it buffers turns in memory
+The memory backend does the heavy lifting (fork/verify/interest/wiki/recall).
+This provider is a thin HTTP adapter: it buffers turns in memory
 during a session and pushes the full transcript once at session end.
 
 Config via environment variables:

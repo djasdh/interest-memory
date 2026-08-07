@@ -22,7 +22,8 @@ type Hit struct {
 
 // VectorIndex is the pluggable vector store interface. Implementations:
 //   - SQLiteVec: sqlite-vec vec0 virtual table over the shared *sql.DB
-//   - FTS5 fallback: keyword-only search when sqlite-vec is unavailable
+//   - Fallback: keyword-only search (plain metadata table + LIKE) when
+//     sqlite-vec is unavailable
 type VectorIndex interface {
 	// Upsert inserts or replaces an entry's vector.
 	Upsert(ctx context.Context, e Entry) error
@@ -33,7 +34,8 @@ type VectorIndex interface {
 	SearchByKeywords(ctx context.Context, agentID, query string, topK int) ([]Hit, error)
 	// Delete removes an entry by id.
 	Delete(ctx context.Context, agentID, id string) error
-	// Available reports whether real vector search is operational.
+	// Available reports whether the index is usable at all (vector search
+	// may still be a keyword-only degradation for the Fallback).
 	Available() bool
 	Close() error
 }

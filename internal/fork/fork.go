@@ -20,7 +20,7 @@ type Candidate struct {
 	Confidence float64  `json:"confidence"`
 	Tags       []string `json:"tags"`
 	TurnRange  [2]int   `json:"turn_range"` // [start_turn, end_turn] 1-indexed
-	Subjective bool     `json:"subjective"` // 主观观点/偏好（豁免 verify 联网核查）
+	Subjective bool     `json:"subjective"` // subjective preference/opinion (exempt from verify's web fact-check)
 	// EventTime is the session event time, set by the service layer after
 	// extraction (LLM never sees this field).
 	EventTime time.Time `json:"-"`
@@ -32,14 +32,14 @@ type LLM interface {
 	ChatJSON(ctx context.Context, messages []llm.Message, out any) error
 }
 
-// ForkAnalyzer is the domain interface (design §七). The service layer
+// ForkAnalyzer is the domain interface. The service layer
 // depends on this, not on the concrete Analyzer.
 type ForkAnalyzer interface {
 	Analyze(ctx context.Context, agentID string, windows [][]llm.Message) ([]Candidate, error)
 }
 
 // Analyzer extracts candidate interest points from transcript windows using
-// a side LLM call per window (design §五 step 1). Windows are analyzed
+// a side LLM call per window (pipeline step 1). Windows are analyzed
 // concurrently (bounded by maxConcurrency); results are deduplicated across
 // the overlapping prefix windows.
 type Analyzer struct {
@@ -75,8 +75,8 @@ func NewAnalyzer(client LLM, cfg config.ForkConfig) *Analyzer {
 	}
 }
 
-// SplitWindows slices turns into fixed-turn windows (design §五: 按 turn_count
-// 切固定轮数窗口). Empty or non-positive windowTurns falls back to 10.
+// SplitWindows slices turns into fixed-turn windows. Empty or non-positive
+// windowTurns falls back to 10.
 // Kept for compatibility; production uses SplitPrefixWindows.
 func SplitWindows(turns []llm.Message, windowTurns int) [][]llm.Message {
 	if windowTurns <= 0 {
@@ -192,8 +192,8 @@ type result struct {
 }
 
 // extract asks the side LLM to identify interest points in a single window,
-// filters low-confidence results (design: confidence≥0.3 过滤) and caps the
-// window at max_candidates_per_window.
+// filters low-confidence results (design: confidence ≥ 0.3 filter) and caps
+// the window at max_candidates_per_window.
 func (a *Analyzer) extract(ctx context.Context, turns []llm.Message) ([]Candidate, error) {
 	snapshot := summarize(turns)
 	if snapshot == "" {

@@ -587,13 +587,16 @@ func TestFlagContradictionsCanonicalID(t *testing.T) {
 
 func TestBuildContradictionPromptLanguage(t *testing.T) {
 	zh := (&service{cfg: Config{Language: "中文"}}).buildContradictionPrompt([]store.Claim{{ID: "c1", Text: "x"}})
-	if !strings.Contains(zh, "矛盾") {
-		t.Errorf("Chinese prompt missing 矛盾:\n%s", zh)
+	if !strings.Contains(zh, "in '中文'") {
+		t.Errorf("Chinese-language prompt missing language directive:\n%s", zh)
 	}
 	if !strings.Contains(zh, "is_contradiction") {
 		t.Errorf("prompt missing is_contradiction field:\n%s", zh)
 	}
 	en := (&service{cfg: Config{Language: "English"}}).buildContradictionPrompt([]store.Claim{{ID: "c1", Text: "x"}})
+	if !strings.Contains(en, "in 'English'") {
+		t.Errorf("English-language prompt missing language directive:\n%s", en)
+	}
 	if !strings.Contains(en, "contradict") {
 		t.Errorf("English prompt missing contradict:\n%s", en)
 	}
@@ -979,8 +982,8 @@ func TestBuildCandidatePromptLanguage(t *testing.T) {
 	group := []store.Claim{{ID: "c0", Text: "A is best"}, {ID: "c1", Text: "B is best"}}
 	cands := []candidatePair{{i: 0, j: 1, sim: 0.9}}
 	zh := (&service{cfg: Config{Language: "中文"}}).buildCandidatePrompt(group, cands)
-	if !strings.Contains(zh, "候选对") {
-		t.Errorf("Chinese prompt missing 候选对:\n%s", zh)
+	if !strings.Contains(zh, "in '中文'") {
+		t.Errorf("Chinese-language prompt missing language directive:\n%s", zh)
 	}
 	if !strings.Contains(zh, `"A is best" ↔ "B is best"`) {
 		t.Errorf("prompt missing candidate pair text:\n%s", zh)

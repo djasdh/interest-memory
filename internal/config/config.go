@@ -46,27 +46,27 @@ type WorkerConfig struct {
 
 // LogConfig controls the change-log retention.
 type LogConfig struct {
-	Retain int `yaml:"retain"` // 每 agent 保留日志条数上限（0=无限增长）
+	Retain int `yaml:"retain"` // retained log entries per agent (0 = unlimited)
 }
 
 // SearchConfig controls the consumer-side memory_search tool.
 type SearchConfig struct {
-	TopK       int `yaml:"top_k"`        // 语义检索默认返回数
-	MaxBodyLen int `yaml:"max_body_len"` // 正文/摘要截断上限（claims/evidence/边不截断）
+	TopK       int `yaml:"top_k"`        // default number of results for semantic search
+	MaxBodyLen int `yaml:"max_body_len"` // body/summary truncation cap (claims/evidence/edges not truncated)
 }
 
 // WikiConfig controls the wiki writing / reconcile stage.
 type WikiConfig struct {
-	MaxHops   int    `yaml:"max_hops"`   // 协同图传播深度
-	BatchSize int    `yaml:"batch_size"` // 协同 agent loop 每批相关页数
-	Language  string `yaml:"language"`   // wiki 页面输出语言（默认中文）
+	MaxHops   int    `yaml:"max_hops"`   // graph propagation depth for reconciliation
+	BatchSize int    `yaml:"batch_size"` // related pages per reconcile agent-loop batch
+	Language  string `yaml:"language"`   // wiki page output language (default English)
 }
 
 // OutputLanguage returns the configured wiki output language, defaulting to
-// Chinese when unset.
+// English when unset.
 func (c WikiConfig) OutputLanguage() string {
 	if c.Language == "" {
-		return "中文"
+		return "English"
 	}
 	return c.Language
 }
@@ -75,11 +75,11 @@ func (c WikiConfig) OutputLanguage() string {
 type VerifyConfig struct {
 	UseWebSearch   bool    `yaml:"use_web_search"`
 	SearchMax      int     `yaml:"search_max"`
-	WebTool        string  `yaml:"web_tool"`        // 网络工具名（registry 中 active）
-	MaxConcurrency int     `yaml:"max_concurrency"` // 候选核查并行度
-	MinConfidence  float64 `yaml:"min_confidence"`  // 矛盾入库最低置信度（0~1；0=禁用，默认禁用）
-	SimThreshold   float64 `yaml:"sim_threshold"`   // 语义归组相似度阈值（同话题候选门槛，默认 0.45）
-	MaxCandidates  int     `yaml:"max_candidates"`  // 语义归组每窗口候选对上限（默认 30）
+	WebTool        string  `yaml:"web_tool"`        // web tool name (active in the registry)
+	MaxConcurrency int     `yaml:"max_concurrency"` // candidate fact-check parallelism
+	MinConfidence  float64 `yaml:"min_confidence"`  // minimum confidence to store a contradiction (0~1; 0 = disabled, default disabled)
+	SimThreshold   float64 `yaml:"sim_threshold"`   // semantic-grouping similarity threshold (same-topic candidate gate, default 0.45)
+	MaxCandidates  int     `yaml:"max_candidates"`  // max candidate pairs per window for semantic grouping (default 30)
 }
 
 type ServerConfig struct {
@@ -103,9 +103,9 @@ type EmbeddingConfig struct {
 }
 
 type ForkConfig struct {
-	PrefixStep       int     `yaml:"prefix_step"`     // 前缀窗口按 user 回合的递增步长
-	MaxWindows       int     `yaml:"max_windows"`     // 前缀窗口上限（超限保留最长的 N 个）
-	MaxConcurrency   int     `yaml:"max_concurrency"` // 窗口提取并行度
+	PrefixStep       int     `yaml:"prefix_step"`     // prefix-window step in user turns
+	MaxWindows       int     `yaml:"max_windows"`     // max prefix windows (keeps the longest N when exceeded)
+	MaxConcurrency   int     `yaml:"max_concurrency"` // window-extraction parallelism
 	SimilarityMerge  float64 `yaml:"similarity_merge"`
 	SimilarityRelate float64 `yaml:"similarity_relate"`
 	ImportanceBoost  float64 `yaml:"importance_boost_per_seen"`

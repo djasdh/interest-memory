@@ -43,7 +43,7 @@ var ErrNoJob = errors.New("worker: job not found")
 
 // Worker serializes transcript processing per agent: each agent gets a FIFO
 // channel and a dedicated goroutine, so concurrent EndSession pushes for the
-// same agent cannot interleave (design §五: worker 串行).
+// same agent cannot interleave (worker serial).
 type Worker struct {
 	mu      sync.Mutex
 	queues  map[string]chan jobItem

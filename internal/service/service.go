@@ -21,7 +21,7 @@ import (
 	"github.com/djasdh/my-agent-core/types"
 )
 
-// Service orchestrates the full memory pipeline (design §五): it wires the
+// Service orchestrates the full memory pipeline: it wires the
 // domain services together and exposes the operations the worker queue and
 // HTTP layer call.
 type Service struct {
@@ -77,7 +77,7 @@ func New(
 }
 
 // ProcessSession runs the full pipeline for one pushed transcript
-// (design §五 steps 1-7). Returns an error that aborts the run; the caller
+// (steps 1-7). Returns an error that aborts the run; the caller
 // decides whether to mark the transcript processed.
 func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Transcript) error {
 	msgs, err := transcript.ToMessages(t.RawTurns)
@@ -149,7 +149,7 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 }
 
 // persistContradictions stores detected contradictions and the bidirectional
-// contradicts edges (design §五 step 4 → §四 contradictions table).
+// contradicts edges (pipeline step 4, stored in the contradictions table).
 func (s *Service) persistContradictions(ctx context.Context, agentID string, pts []store.InterestPoint, claims []store.Claim) error {
 	if len(claims) == 0 {
 		return nil

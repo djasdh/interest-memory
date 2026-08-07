@@ -45,7 +45,7 @@ type Grader interface {
 	GradeForRecall(ctx context.Context, agentID string, hits []vec.Hit) ([]verify.Graded, error)
 }
 
-// Options controls one recall request (design §八 GET /recall).
+// Options controls one recall request (GET /recall).
 type Options struct {
 	TopK        int
 	IncludeWiki bool
@@ -57,7 +57,7 @@ type Options struct {
 	RecentDays int
 }
 
-// RecallService is the domain interface (design §七).
+// RecallService is the domain interface.
 type RecallService interface {
 	Recall(ctx context.Context, agentID, query string, opts Options) (string, error)
 	// Search returns structured hits (full body/claims/evidence + edges) for
@@ -83,10 +83,10 @@ type Result struct {
 	Kind        string            `json:"kind"` // interest_point | wiki_page
 	ID          string            `json:"id"`
 	Title       string            `json:"title"`
-	BodyMD      string            `json:"body_md"` // 页正文或兴趣点摘要（按 max_body_len 截断）
+	BodyMD      string            `json:"body_md"` // page body or interest-point summary (truncated to max_body_len)
 	Status      string            `json:"status"`
 	Subjective  bool              `json:"subjective,omitempty"`
-	Agent       string            `json:"agent,omitempty"` // 来源命名空间（互通模式标注；isolated 为空）
+	Agent       string            `json:"agent,omitempty"` // source namespace (annotated in cross-namespace mode; empty when isolated)
 	Claims      []store.Claim     `json:"claims,omitempty"`
 	Evidence    []store.Evidence  `json:"evidence,omitempty"`
 	Reliability store.Reliability `json:"reliability"`
@@ -204,7 +204,7 @@ func (s *service) gradeByAgent(ctx context.Context, hits []vec.Hit) ([]verify.Gr
 
 // Recall embeds the query, retrieves interest points + wiki pages by vector
 // (keyword fallback), grades them for injection, and assembles a
-// <memory-context> block (design §五: 会话始 GET /recall).
+// <memory-context> block (session-start GET /recall).
 func (s *service) Recall(ctx context.Context, agentID, query string, opts Options) (string, error) {
 	if strings.TrimSpace(query) == "" {
 		return "", nil
@@ -382,7 +382,7 @@ func renderOne(g verify.Graded) string {
 }
 
 // renderOneWithSource renders one graded recall line; when annotate is true
-// and the hit carries a source agent, it appends `[来源: <agent>]`.
+// and the hit carries a source agent, it appends `[from: <agent>]`.
 func renderOneWithSource(g verify.Graded, annotate bool) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("- [%s] %s [%s]", g.Hit.ID, titleOf(g), g.Hit.Kind))
@@ -399,7 +399,7 @@ func renderOneWithSource(g verify.Graded, annotate bool) string {
 		b.WriteString(" — " + g.Note)
 	}
 	if annotate && g.Hit.AgentID != "" {
-		b.WriteString(fmt.Sprintf(" [来源: %s]", g.Hit.AgentID))
+		b.WriteString(fmt.Sprintf(" [from: %s]", g.Hit.AgentID))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -549,7 +549,7 @@ func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen 
 // resultFor assembles one Result for a hit, attaching edges with far-end
 // titles. Archived/superseded entities without a live replacement are
 // filtered out; when a replacement exists the hit is silently substituted
-// with the successor page (design: 替代静默替换).
+// with the successor page (design: silent replacement substitution).
 func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxBodyLen int) (*Result, error) {
 	if h.Kind == "interest_point" {
 		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)

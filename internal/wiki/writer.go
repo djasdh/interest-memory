@@ -14,7 +14,7 @@ import (
 	"github.com/djasdh/my-agent-core/types"
 )
 
-// Compiler is the domain interface (design §七): write wiki pages from
+// Compiler is the domain interface: write wiki pages from
 // interest points + transcript via the agent loop, then rebuild edges.
 // Compile returns the ids of pages touched this run (new/updated) so the
 // caller can reconcile related pages.
@@ -42,6 +42,7 @@ type Writer struct {
 	deps    ToolsDeps
 	prov    ProviderFactory
 	system  string
+	lang    string
 	timeout time.Duration
 	runLoop loopRunner
 }
@@ -49,31 +50,32 @@ type Writer struct {
 // NewWriter builds a Writer. deps carries store/vec/embedder/llm/searcher;
 // prov builds the LLM provider lazily per call so tests can inject a fake.
 // lang is the output language hint injected into the system prompt
-// (default "中文").
+// (default "English").
 func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string) *Writer {
 	if lang == "" {
-		lang = "中文"
+		lang = "English"
 	}
-	system := `你是一个 wiki 编辑助手。你为单个兴趣点撰写或更新一个 wiki 页面。
-流程（必须遵守）：
-1. 用 wiki_query 检查是否已有相关页面；已有则用其 id 更新，而非新建
-2. 撰写页面内容（markdown，可含 [[wikilink]] 双链指向相关页）
-3. 对客观事实声明，用 verify_claims 联网核查后再写入
-4. 正式写入前，必须调用 review 工具审查 draft，采纳合理建议
-5. 用 wiki_write 写入：page_type=concept，传 interest_point_id（本兴趣点 id），
-   提供恰当的 tags、edges、claims
-6. 输出简洁准确，不要写无意义内容
+	system := `You are a wiki editing assistant. You write or update ONE wiki page per interest point.
+Workflow (mandatory):
+1. Use wiki_query to check whether a related page already exists; if so update it by its id instead of creating a new one
+2. Write the page content (markdown, may use [[wikilink]] double links to related pages)
+3. For objective factual claims, run verify_claims web fact-check before writing
+4. Before the formal write, you MUST call the review tool to review your draft and adopt sound suggestions
+5. Use wiki_write with page_type=concept, pass interest_point_id (this point's id), and provide suitable tags, edges, claims
+6. Output concise and accurate content; do not write filler
 
-语言：所有页面内容（标题、正文、相关链接）一律使用「` + lang + `」输出。标题中的英文专有名词（如项目名、工具名）可保留原文，但解释性文字必须使用该语言。
+Language: all page content (title, body, related links) must be written in ` + lang + `.
+English proper nouns in titles (project names, tool names) may keep their original form, but explanatory text must use the configured language.
 
-链接规则（必须遵守）：
-- [[wikilink]] 的目标必须是 wiki_query 查到的、已存在页面的 id（如 [[pipeline-vs-agent-loop]]），
-  禁止链接工具名（如 [[verify_claims]]）、外部概念（如 [[PostgreSQL]]）、抽象标签（如 [[design-decision]]）或本 wiki 中不存在的页面。
-- 如果相关概念在本 wiki 中没有页面，不要用 [[]] 链接它，直接在正文中用普通文本提及。`
+Link rules (mandatory):
+- [[wikilink]] targets must be ids of pages that exist (as confirmed via wiki_query), e.g. [[pipeline-vs-agent-loop]];
+  do NOT link tool names (e.g. [[verify_claims]]), external concepts (e.g. [[PostgreSQL]]), abstract tags (e.g. [[design-decision]]), or pages that do not exist in this wiki.
+- If a related concept has no page in this wiki, do not link it with [[]]; mention it in plain text in the body.`
 	return &Writer{
 		deps:    deps,
 		prov:    prov,
 		system:  system,
+		lang:    lang,
 		timeout: 10 * time.Minute,
 		runLoop: defaultRunLoop,
 	}
@@ -92,8 +94,8 @@ func (w *Writer) toolsFor(agentID string) []types.Tool {
 	return []types.Tool{
 		NewQueryTool(w.deps, agentID),
 		NewTagsTool(w.deps, agentID),
-		NewVerifyClaimsTool(w.deps),
-		NewReviewTool(w.deps, agentID),
+		NewVerifyClaimsTool(w.deps, w.lang),
+		NewReviewTool(w.deps, agentID, w.lang),
 		NewWriteTool(w.deps, agentID),
 	}
 }
@@ -119,7 +121,7 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 	for _, ip := range pts {
 		related := prelookupRelated(ctx, w.deps, agentID, ip)
 		dialog := dialogSegment(msgs, ip.TurnRange)
-		prompt := buildPointPrompt(ip, dialog, related)
+		prompt := buildPointPrompt(ip, dialog, related, w.lang)
 
 		var pointTouched []string
 		loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
@@ -158,31 +160,35 @@ func (w *Writer) backfillEventTime(ctx context.Context, agentID string, ids []st
 
 // buildPointPrompt renders one interest point's write prompt: the point
 // (name/summary/keywords/reliability/subjective/evidence), the exact dialog
-// segment backing it, and the pre-looked-up related page summary.
-func buildPointPrompt(ip store.InterestPoint, dialog, related string) string {
+// segment backing it, and the pre-looked-up related page summary. lang is the
+// output language instruction appended at the end.
+func buildPointPrompt(ip store.InterestPoint, dialog, related, lang string) string {
+	if lang == "" {
+		lang = "English"
+	}
 	var b strings.Builder
-	b.WriteString("请为下面的兴趣点撰写或更新一个 wiki 页面。\n\n")
-	b.WriteString("## 兴趣点\n")
-	b.WriteString(fmt.Sprintf("- 主题: %s\n", ip.Name))
+	b.WriteString("Write or update ONE wiki page for the following interest point.\n\n")
+	b.WriteString("## Interest point\n")
+	b.WriteString(fmt.Sprintf("- Topic: %s\n", ip.Name))
 	if ip.Summary != "" {
-		b.WriteString(fmt.Sprintf("- 摘要: %s\n", truncate(ip.Summary, 500)))
+		b.WriteString(fmt.Sprintf("- Summary: %s\n", truncate(ip.Summary, 500)))
 	}
 	if len(ip.Keywords) > 0 {
-		b.WriteString(fmt.Sprintf("- 标签: %s\n", strings.Join(ip.Keywords, ", ")))
+		b.WriteString(fmt.Sprintf("- Tags: %s\n", strings.Join(ip.Keywords, ", ")))
 	}
 	if ip.Subjective {
-		b.WriteString("- 主观性: 是（用户个人偏好/观点）——无需联网核查事实\n")
+		b.WriteString("- Subjectivity: subjective (user's own preference/opinion) — no web fact-check needed\n")
 	} else {
-		b.WriteString("- 主观性: 否（客观事实声明）——写入前用 verify_claims 联网核查\n")
+		b.WriteString("- Subjectivity: objective (factual claim) — run verify_claims web fact-check before writing\n")
 	}
 	if !ip.EventTime.IsZero() {
-		b.WriteString(fmt.Sprintf("- 事件时间: %s（wiki_write 的 event_time 参数填这个）\n", ip.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")))
+		b.WriteString(fmt.Sprintf("- Event time: %s (use this for wiki_write's event_time argument)\n", ip.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")))
 	}
 	if ip.Reliability.Status != "" {
-		b.WriteString(fmt.Sprintf("- 可信度: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))
+		b.WriteString(fmt.Sprintf("- Reliability: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))
 	}
 	if len(ip.Reliability.Evidence) > 0 {
-		b.WriteString("\n## 证据（写 claims 时引用来源）\n")
+		b.WriteString("\n## Evidence (cite sources when writing claims)\n")
 		for _, e := range ip.Reliability.Evidence {
 			loc := e.SourceID
 			if e.URL != "" {
@@ -190,19 +196,20 @@ func buildPointPrompt(ip store.InterestPoint, dialog, related string) string {
 			}
 			b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Kind, truncate(loc, 200)))
 			if e.Excerpt != "" {
-				b.WriteString(fmt.Sprintf("  引用: %s\n", truncate(e.Excerpt, 200)))
+				b.WriteString(fmt.Sprintf("  Quote: %s\n", truncate(e.Excerpt, 200)))
 			}
 		}
 	}
 	if dialog != "" {
-		b.WriteString("\n## 对应对话片段（来源轮次）\n")
+		b.WriteString("\n## Corresponding conversation segment (source turns)\n")
 		b.WriteString(dialog)
 	}
 	if related != "" {
-		b.WriteString("\n## 已存在的相关页面（优先更新而非新建）\n")
+		b.WriteString("\n## Existing related pages (prefer updating rather than creating)\n")
 		b.WriteString(related)
 	}
-	b.WriteString("\n请按规则：wiki_query → draft → verify_claims（客观声明）→ review → wiki_write（带 interest_point_id）。\n")
+	b.WriteString("\nFollow the workflow: wiki_query → draft → verify_claims (objective claims) → review → wiki_write (with interest_point_id).\n")
+	b.WriteString(fmt.Sprintf("Write all page content (title, body, related links) in '%s'.\n", lang))
 	return b.String()
 }
 
@@ -282,8 +289,9 @@ func prelookupRelated(ctx context.Context, deps ToolsDeps, agentID string, ip st
 	return b.String()
 }
 
-// RebuildEdges regenerates the adjacency table from page body wikilinks and
-// persists contradictions bidirectionally (design §五 step 7).
+// RebuildEdges regenerates the adjacency table from page body wikilinks.
+// (Contradictions are persisted separately by service.persistContradictions,
+// pipeline step 4.)
 func (w *Writer) RebuildEdges(ctx context.Context, agentID string) error {
 	pages, err := w.deps.Store.ListPages(ctx, agentID, "")
 	if err != nil {

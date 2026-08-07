@@ -122,14 +122,14 @@ func TestChangeLogAppendAndList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 倒序：最新在前
+	// Descending: newest first
 	if len(got) != 2 || got[0].ID != "l2" || got[1].ID != "l1" {
 		t.Errorf("logs order = %+v, want [l2 l1]", idsOfLogs(got))
 	}
 	if len(got[1].Edges) != 1 || got[1].Edges[0].Kind != EdgeHasPage {
 		t.Errorf("edges = %+v", got[1].Edges)
 	}
-	// Agent 隔离
+	// Agent isolation
 	other, _ := s.ListLogs(ctx, "b", 0, 0)
 	if len(other) != 0 {
 		t.Errorf("agent-b logs = %d, want 0", len(other))
@@ -144,7 +144,7 @@ func TestChangeLogListPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// limit=2, offset=1 → 倒序 [l3 l2]
+	// limit=2, offset=1 → descending [l3 l2]
 	got, err := s.ListLogs(ctx, "a", 2, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestChangeLogRetainCaps(t *testing.T) {
 	if err := s.SetLogRetain(ctx, "a", 3); err != nil {
 		t.Fatal(err)
 	}
-	// 追加一条触发清理 → 只保留最近 3 条
+	// Append another entry to trigger cleanup → only the latest 3 are kept
 	if err := s.AppendLog(ctx, ChangeLog{ID: "l5", AgentID: "a", EntityID: "e", Title: "t", Action: "update"}); err != nil {
 		t.Fatal(err)
 	}

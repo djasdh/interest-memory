@@ -28,8 +28,9 @@ type reviewResult struct {
 // formal write. It is strictly read-only — it semantic-searches existing wiki
 // pages relevant to the draft, then asks the LLM to spot contradictions /
 // duplicates / stale references and propose edits. It returns a suggestion
-// list; the main agent decides what to adopt.
-func NewReviewTool(deps ToolsDeps, agentID string) types.Tool {
+// list; the main agent decides what to adopt. lang is the output language for
+// the review prompt.
+func NewReviewTool(deps ToolsDeps, agentID, lang string) types.Tool {
 	return types.Tool{
 		Name:        "review",
 		Description: "Read-only review of a draft BEFORE writing it to the wiki. Provide the draft content you plan to write; this checks it against existing wiki pages and returns suggestions (contradictions, duplicates, stale references, improvements). Call this before every wiki_write. It never modifies anything.",
@@ -53,14 +54,14 @@ func NewReviewTool(deps ToolsDeps, agentID string) types.Tool {
 			if strings.TrimSpace(draft) == "" {
 				return "", fmt.Errorf("review: missing 'draft'")
 			}
-			return reviewDraft(context.Background(), deps, agentID, draft, pageID)
+			return reviewDraft(context.Background(), deps, agentID, draft, pageID, lang)
 		},
 	}
 }
 
 // reviewDraft collects relevant existing pages (read-only) and asks the LLM
 // for a structured review. Degrades to an empty-suggestion JSON on any error.
-func reviewDraft(ctx context.Context, deps ToolsDeps, agentID, draft, pageID string) (string, error) {
+func reviewDraft(ctx context.Context, deps ToolsDeps, agentID, draft, pageID, lang string) (string, error) {
 	relevant := relatedPages(ctx, deps, agentID, draft, pageID)
 
 	if deps.LLM == nil {
@@ -70,6 +71,9 @@ func reviewDraft(ctx context.Context, deps ToolsDeps, agentID, draft, pageID str
 		return string(out) + "\n", nil
 	}
 
+	if lang == "" {
+		lang = "English"
+	}
 	var b strings.Builder
 	b.WriteString("You are a wiki reviewer. Review the draft below against existing wiki pages and return suggestions the writer should consider. Only point out real issues: contradictions, near-duplicates, stale references to superseded pages, and concrete improvements. Be concise.\n\n")
 	b.WriteString("## Draft to write\n\n")
@@ -104,6 +108,7 @@ Return ONLY valid JSON:
      "message": "what to change and why"}
   ]
 }`)
+	b.WriteString(fmt.Sprintf("\n\nWrite summary and all suggestion messages in '%s'.\n", lang))
 
 	var vr reviewResult
 	if err := deps.LLM.ChatJSON(ctx, []llm.Message{{Role: "user", Content: b.String()}}, &vr); err != nil {

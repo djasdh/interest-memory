@@ -4,7 +4,7 @@ import "context"
 
 // Store is the facade interface for all persistent state, scoped by agent_id.
 // Domain layers depend on this interface only (mock-friendly); the SQLite
-// implementation lives in store.go.
+// implementation lives in sqlite.go.
 type Store interface {
 	// ---- interest points ----
 	UpsertInterestPoint(ctx context.Context, p InterestPoint) error
@@ -20,7 +20,7 @@ type Store interface {
 	// ListTags aggregates page tags for the agent (tag taxonomy), count desc.
 	ListTags(ctx context.Context, agentID string) ([]TagCount, error)
 
-	// ---- adjacency edges (双链) ----
+	// ---- adjacency edges (wikilinks) ----
 	UpsertEdge(ctx context.Context, agentID string, e Edge) error
 	// AddEdgePair adds the edge and (for EdgeContradict) the reverse pair,
 	// enforcing the EnsureContradictPair invariant.
@@ -33,7 +33,7 @@ type Store interface {
 	// silently substitute superseded entities.
 	ResolveReplacement(ctx context.Context, agentID, id string) (*Replacement, error)
 
-	// ---- pending links (死链反馈) ----
+	// ---- pending links (dead-link feedback) ----
 	// RecordPendingLink notes a [[target]] in page sourceID that has no
 	// matching page yet (dead link). Upsert semantics: repeated calls for the
 	// same pair update the timestamp, not duplicate.

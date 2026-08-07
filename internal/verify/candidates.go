@@ -22,7 +22,6 @@ type verifyResult struct {
 	Evidence       []string `json:"evidence"`
 	FreshLevel     string   `json:"freshness_level"` // fresh | aging | stale | unknown
 	TTLDays        int      `json:"ttl_days"`
-	SearchQuery    string   `json:"search_query,omitempty"`
 	Relation       string   `json:"relation"`        // none | supersede | update | delete
 	RelationReason string   `json:"relation_reason"` // why this relation holds
 }
@@ -61,7 +60,7 @@ func (s *service) VerifyCandidates(ctx context.Context, agentID string, cands []
 func (s *service) verifyOne(ctx context.Context, agentID string, c fork.Candidate) (Verified, error) {
 	hist := s.findSimilar(ctx, agentID, c)
 	evidence, query := s.gatherEvidence(ctx, c)
-	prompt := buildVerifyPrompt(c, evidence, hist)
+	prompt := buildVerifyPrompt(c, evidence, hist, s.cfg.Language)
 	var vr verifyResult
 	if err := s.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &vr); err != nil {
 		return Verified{}, fmt.Errorf("verify: candidate %q: %w", c.Topic, err)
@@ -153,7 +152,7 @@ func (s *service) findSimilar(ctx context.Context, agentID string, c fork.Candid
 // gatherEvidence runs a web search for the candidate when enabled and not
 // subjective, returning the top items and the query used. On any search error
 // it returns nil (degraded). Subjective candidates skip web fact-checking but
-// the LLM verification still runs (关系判断照常).
+// the LLM verification still runs (relation judgment proceeds as usual).
 func (s *service) gatherEvidence(ctx context.Context, c fork.Candidate) ([]websearch.SearchItem, string) {
 	if s.search == nil || !s.cfg.UseWebSearch || c.Subjective {
 		return nil, ""
@@ -169,9 +168,12 @@ func (s *service) gatherEvidence(ctx context.Context, c fork.Candidate) ([]webse
 	return items, query
 }
 
-func buildVerifyPrompt(c fork.Candidate, evidence []websearch.SearchItem, hist *store.InterestPoint) string {
+func buildVerifyPrompt(c fork.Candidate, evidence []websearch.SearchItem, hist *store.InterestPoint, lang string) string {
 	var b strings.Builder
 	b.WriteString("You are a fact-checker for a personal memory system. Judge whether the following interest point extracted from a conversation is reliable, how fresh it is, and how it relates to the most similar historical memory (if any).\n\n")
+	if lang == "" {
+		lang = "English"
+	}
 	b.WriteString(fmt.Sprintf("Topic: %s\n", c.Topic))
 	b.WriteString(fmt.Sprintf("Claim/reason from conversation: %s\n", c.Reason))
 	b.WriteString(fmt.Sprintf("Extraction confidence: %.2f\n", c.Confidence))
@@ -202,7 +204,6 @@ Return ONLY valid JSON, no other text, with this shape:
   "evidence": ["short reason 1", "short reason 2"],
   "freshness_level": "fresh" | "aging" | "stale" | "unknown",
   "ttl_days": 0-365,
-  "search_query": "the query that should be used if future verification is needed",
   "relation": "none" | "supersede" | "update" | "delete",
   "relation_reason": "one sentence explaining the chosen relation (omit if relation=none)"
 }
@@ -212,6 +213,7 @@ Relation semantics (only meaningful when a similar historical memory exists):
 - "update": the new claim corrects or refines the historical one (merge into it)
 - "delete": the new claim shows the historical one is no longer true (remove it)
 - "none": no meaningful relation to the historical memory`)
+	b.WriteString(fmt.Sprintf("\n\nWrite all generated text (evidence, relation_reason) in '%s'.\n", lang))
 	return b.String()
 }
 

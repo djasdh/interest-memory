@@ -639,7 +639,7 @@ func TestRecallAcrossNamespacesAnnotatesSource(t *testing.T) {
 	if !strings.Contains(out, "[ip-a]") || !strings.Contains(out, "[ip-b]") {
 		t.Fatalf("expected both namespaces' hits: %q", out)
 	}
-	if !strings.Contains(out, "[来源: agent-a]") || !strings.Contains(out, "[来源: agent-b]") {
+	if !strings.Contains(out, "[from: agent-a]") || !strings.Contains(out, "[from: agent-b]") {
 		t.Fatalf("expected source annotation for both agents: %q", out)
 	}
 }
@@ -665,7 +665,7 @@ func TestRecallIsolatedNoAnnotation(t *testing.T) {
 	if !strings.Contains(out, "[ip-a]") {
 		t.Fatalf("missing own hit: %q", out)
 	}
-	if strings.Contains(out, "来源:") {
+	if strings.Contains(out, "from:") {
 		t.Fatalf("isolated recall should not annotate source: %q", out)
 	}
 }

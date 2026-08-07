@@ -76,7 +76,7 @@ func (s *SQLiteStore) Outlinks(ctx context.Context, agentID, sourceID string) ([
 	return scanEdges(rows)
 }
 
-// Backlinks returns edges whose target is targetID (反向查询).
+// Backlinks returns edges whose target is targetID (reverse lookup).
 func (s *SQLiteStore) Backlinks(ctx context.Context, agentID, targetID string) ([]Edge, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT source_id, target_id, kind, weight, created_at

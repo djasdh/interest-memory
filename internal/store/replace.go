@@ -3,8 +3,8 @@ package store
 import "context"
 
 // Replacement is the resolved successor of an archived/superseded entity:
-// the far end of the sequel chain (旧点 --sequel--> 新点), preferring the
-// successor's wiki page when one exists.
+// the far end of the sequel chain (old point --sequel--> new point),
+// preferring the successor's wiki page when one exists.
 type Replacement struct {
 	// InterestPointID is the successor interest point (empty when the
 	// successor is only reachable as a page).

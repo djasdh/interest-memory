@@ -35,10 +35,14 @@ type Store interface {
 }
 
 // Cleaner deduplicates/merges/relates verified candidates against historical
-// interest points (design §五 step 3): embedding recall → >0.85 merge,
-// 0.5~0.85 relate edge, else create. Returns the touched interest points AND
-// the ids of archived historical points (relation delete/supersede) so the
-// reconcile stage can cascade to their wiki pages.
+// interest points (pipeline step 3). The verify#1 relation verdict takes
+// precedence over pure similarity thresholds: delete/supersede archive the
+// most similar historical point (and supersede creates a successor linked by
+// a sequel edge), update merges into it; otherwise embedding recall falls back
+// to similarity — ≥ SimilarityMerge merge, ≥ SimilarityRelate relate edge,
+// else create. Returns the touched interest points AND the ids of archived
+// historical points (relation delete/supersede) so the reconcile stage can
+// cascade to their wiki pages.
 type Cleaner interface {
 	Clean(ctx context.Context, agentID string, verified []verify.Verified) ([]store.InterestPoint, []string, error)
 }

@@ -10,7 +10,9 @@ import (
 )
 
 // rawTurn is the Hermes wire format for a single transcript message:
-// [{role, content}]. role is "user" | "assistant" | "system" | "tool".
+// [{role, content}]. Accepted roles: "user" | "assistant" | "tool" |
+// "toolresult" | "tool_result" (case-insensitive); "system" and unknown
+// roles are dropped as not interest-bearing.
 type rawTurn struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`

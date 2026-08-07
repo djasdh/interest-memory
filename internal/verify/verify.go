@@ -52,10 +52,10 @@ type PointStore interface {
 type Relation string
 
 const (
-	RelationNone      Relation = "none"      // 无关/新增，不触碰旧点
-	RelationSupersede Relation = "supersede" // 取代：新候选覆盖旧点（旧点归档 + 新点创建）
-	RelationUpdate    Relation = "update"    // 更新：新候选修正/补充旧点内容（合并进旧点）
-	RelationDelete    Relation = "delete"    // 删除：新候选推翻旧点（旧点归档，不创建新点）
+	RelationNone      Relation = "none"      // unrelated/new, leaves existing points untouched
+	RelationSupersede Relation = "supersede" // supersede: the new candidate replaces the old point (old archived + new created)
+	RelationUpdate    Relation = "update"    // update: the new candidate corrects/refines the old point (merged into it)
+	RelationDelete    Relation = "delete"    // delete: the new candidate overturns the old point (old archived, nothing created)
 )
 
 // Verified is a fork candidate after fact-checking (verify#1): the LLM
@@ -76,9 +76,9 @@ type Graded struct {
 	Hit        vec.Hit
 	Title      string
 	Confidence float64
-	Status     string    // supported | contested | unknown
+	Status     string    // supported | contested | unknown | stale
 	FreshLevel string    // fresh | aging | stale | unknown
-	EventTime  time.Time // 事件发生时间（temporal 注入）
+	EventTime  time.Time // event time (temporal injection)
 	Note       string    // self-check hint
 }
 
@@ -90,8 +90,8 @@ type Config struct {
 	WebTool        string
 	LLM            config.LLMConfig
 	MaxConcurrency int
-	// Language is the output language for the contradiction-detection prompt
-	// (defaults to "中文" when empty). JSON field names stay English.
+	// Language is the output language for the correction-layer prompts
+	// (defaults to "English" when empty). JSON field names stay English.
 	Language string
 	// MinConfidence is the floor for contradiction confidence (0~1); pairs
 	// below it are dropped. <=0 disables the filter (default).
@@ -104,11 +104,12 @@ type Config struct {
 	MaxCandidates int
 }
 
-// Verifier is the domain interface (design §六/§七): 三段式纠错 + 闭环。
+// Verifier is the domain interface: three-stage correction + feedback loop.
 type Verifier interface {
-	// VerifyCandidates fact-checks fork candidates (verify#1): LLM 事实核查
-	// (+ 网络搜索)，主观候选豁免联网但 LLM 核查照常，判定与最相似历史点的
-	// 关系（supersede/update/delete），产出 Reliability/Freshness/evidence。
+	// VerifyCandidates fact-checks fork candidates (verify#1): LLM fact-check
+	// (+ web search); subjective candidates are exempt from the web search but
+	// still LLM-checked, and the relation to the most similar historical point
+	// (supersede/update/delete) is decided. Produces Reliability/Freshness/evidence.
 	VerifyCandidates(ctx context.Context, agentID string, cands []fork.Candidate) ([]Verified, error)
 	// CheckClaims extracts structured claims from interest points (verify#2).
 	CheckClaims(ctx context.Context, agentID string, pts []store.InterestPoint) ([]store.Claim, error)
@@ -140,7 +141,7 @@ func New(llm LLM, st PointStore, search websearch.Searcher, ri Retriever, emb Em
 		cfg.MaxConcurrency = 4
 	}
 	if cfg.Language == "" {
-		cfg.Language = "中文"
+		cfg.Language = "English"
 	}
 	if cfg.SimThreshold <= 0 {
 		cfg.SimThreshold = 0.45

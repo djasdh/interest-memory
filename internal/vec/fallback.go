@@ -16,7 +16,6 @@ type Fallback struct {
 	mu    sync.Mutex
 	ready bool
 }
-
 // NewFallback creates the keyword fallback store.
 func NewFallback(db *sql.DB) (*Fallback, error) {
 	f := &Fallback{db: db}
@@ -38,6 +37,8 @@ func (f *Fallback) ensureTable(ctx context.Context) error {
 	return err
 }
 
+// Available always reports true: the fallback is usable, but only for
+// keyword search, never real vector search.
 func (f *Fallback) Available() bool { return true }
 
 // Upsert stores the metadata (vector is ignored in fallback mode).

@@ -56,7 +56,7 @@ func TestBuildPointPromptIncludesEvidenceDialogRelated(t *testing.T) {
 	dialog := "[USER]: 我们用 PostgreSQL\n[ASSISTANT]: 好的\n"
 	related := "=== related: postgresql-page (score 0.90) ===\nID: postgresql-page\nPreview: 已有页内容..."
 
-	prompt := buildPointPrompt(ip, dialog, related)
+	prompt := buildPointPrompt(ip, dialog, related, "English")
 	for _, want := range []string{"PostgreSQL", "https://x.example", "[USER]: 我们用 PostgreSQL", "postgresql-page"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q\n---\n%s", want, prompt)
@@ -70,7 +70,7 @@ func TestCompileRunsPerPointLoop(t *testing.T) {
 	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
 	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
 		return provider.NewConfiguredProvider(model, "test"), nil
-	}, "中文")
+	}, "English")
 	w.runLoop = runner.run
 
 	msgs := []types.Message{
@@ -97,7 +97,7 @@ func TestBuildPointPromptIncludesEventTime(t *testing.T) {
 	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	ip := pt("ip-1", "PostgreSQL", "默认数据库", [2]int{0, 2}, nil)
 	ip.EventTime = et
-	prompt := buildPointPrompt(ip, "", "")
+	prompt := buildPointPrompt(ip, "", "", "English")
 	if !strings.Contains(prompt, "2026-08-01") {
 		t.Errorf("prompt missing event time\n---\n%s", prompt)
 	}
@@ -114,7 +114,7 @@ func TestCompileBackfillsEventTime(t *testing.T) {
 	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
 	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
 		return provider.NewConfiguredProvider(model, "test"), nil
-	}, "中文")
+	}, "English")
 	w.runLoop = runner.run
 
 	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)

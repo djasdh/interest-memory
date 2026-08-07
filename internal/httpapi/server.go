@@ -35,7 +35,7 @@ type Worker interface {
 	GetJob(ctx context.Context, jobID string) (*worker.Job, error)
 }
 
-// Server is the REST API server (design §八).
+// Server is the REST API server.
 type Server struct {
 	svc Service
 	wk  Worker
