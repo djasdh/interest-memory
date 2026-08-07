@@ -49,7 +49,7 @@ adapter with in-memory turn buffering.
 | Var | Default | Purpose |
 |---|---|---|
 | `INTEREST_BASE_URL` | `http://127.0.0.1:8899` | interest-memory service URL (required) |
-| `INTEREST_AGENT` | Hermes profile | agent namespace for `/api/v1/{agent}/...` |
+| `INTEREST_AGENT` | Hermes profile | agent namespace for `/api/v1/{agent}/...` (overrides profile; see "Namespace resolution") |
 | `INTEREST_TIMEOUT` | `8` | per-request timeout seconds |
 
 ## How it works
@@ -65,6 +65,26 @@ adapter with in-memory turn buffering.
 - `on_session_end(messages)` — posts the buffered transcript (or the full
   history when provided) as `{session_id, turn_count, raw_turns}`.
 - `get_tool_schemas()` — returns `[]` (context-only provider).
+
+## Namespace resolution (special adapter — not a bug)
+
+Unlike the other bridges (opencode / pi / codex / claudecode / reasonix, which
+default their namespace to the platform name), Hermes has **no single fixed
+platform name**. Namespace resolves with this precedence:
+
+```
+INTEREST_AGENT env  >  Hermes active profile (agent_identity)  >  "default"
+```
+
+- This is a **special adapter choice**, not an architecture gap: Hermes is
+  profile-oriented (`hermes profile use coder`), so per-profile memory
+  namespaces are the intended isolation unit.
+- Consequence: with the built-in `default` profile and no `INTEREST_AGENT`,
+  Hermes shares the `"default"` namespace with any other bridge that also
+  falls back to `"default"` (e.g. openclaw before you set
+  `plugins.entries.interest-memory.config.agent`). To keep Hermes isolated,
+  set `INTEREST_AGENT=hermes` (or a profile-specific value) in
+  `~/.hermes/.env`.
 
 ## Smoke test without Hermes
 
