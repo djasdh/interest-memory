@@ -8,8 +8,31 @@
 #   install.py 参数：--dry-run / --noninteractive / --server-only / --systemd / --help
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+die() { echo -e "\033[31m[error]\033[0m $*" >&2; exit 1; }
+say() { echo -e "\033[32m[install]\033[0m $*"; }
+warn() { echo -e "\033[33m[warn]\033[0m $*"; }
+
+# ---- 仓库定位（支持 curl | bash 远程执行）-----------------------------------
+# 本地仓库内运行：BASH_SOURCE 指向 scripts/install.sh，直接定位。
+# 远程管道运行：BASH_SOURCE 不可用，自动拉取发布源码到临时目录再转交。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || true)"
+REPO="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || true)"
 PY="$REPO/scripts/install.py"
+
+if [[ ! -f "$PY" ]]; then
+  REMOTE_TMP="$(mktemp -d)"
+  say "远程安装模式：拉取源码到 $REMOTE_TMP ..."
+  curl -fsSL "https://github.com/djasdh/interest-memory/archive/refs/heads/main.tar.gz" | tar xz -C "$REMOTE_TMP"
+  REPO="$REMOTE_TMP/interest-memory-main"
+  PY="$REPO/scripts/install.py"
+  cd "$REPO"
+fi
+
+# curl | bash 模式下 stdin 是脚本管道；有真实终端则重绑，保证交互式 TUI 可用。
+# 无终端环境（CI 等）保持管道 stdin，install.py 自行降级。
+if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+  exec < /dev/tty 2>/dev/null || true
+fi
 
 # 需要安装的依赖（--no-deps 时跳过自动安装）
 NO_DEPS=0
@@ -21,10 +44,6 @@ for arg in "$@"; do
     PY_ARGS+=("$arg")
   fi
 done
-
-die() { echo -e "\033[31m[error]\033[0m $*" >&2; exit 1; }
-say() { echo -e "\033[32m[install]\033[0m $*"; }
-warn() { echo -e "\033[33m[warn]\033[0m $*"; }
 
 # Ctrl+C：友好提示并以 130（SIGINT）退出；python TUI 阶段由 install.py 自行处理。
 trap 'echo; warn "已取消 (Ctrl+C)"; exit 130' INT

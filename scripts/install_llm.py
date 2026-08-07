@@ -27,9 +27,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from install_presets import LLM_PRESETS  # noqa: E402
+try:
+    from install_presets import LLM_PRESETS  # noqa: E402
+except ImportError:
+    # 远程执行（curl | python3 -）时本地没有 presets：自动拉取到临时目录。
+    import tempfile
+    import urllib.request
+    _tmp = tempfile.mkdtemp(prefix="im-llm-")
+    _presets_url = "https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts/install_presets.py"
+    urllib.request.urlretrieve(_presets_url, os.path.join(_tmp, "install_presets.py"))
+    sys.path.insert(0, _tmp)
+    from install_presets import LLM_PRESETS  # noqa: E402
 
-REPO = Path(__file__).resolve().parent.parent
+_here = Path(__file__).resolve()
+REPO = _here.parent.parent if _here.is_file() else Path.cwd()  # curl | python3 - 时回退到 cwd
 CONFIG = REPO / "config.yaml"
 CONFIG_EXAMPLE = REPO / "config.example.yaml"
 KEY_FILE = Path.home() / ".config" / "interest-memory.env"
@@ -220,6 +231,9 @@ def main() -> None:
 
     source = CONFIG if CONFIG.exists() else CONFIG_EXAMPLE
     if not CONFIG.exists():
+        if not CONFIG_EXAMPLE.exists():
+            warn(f"config.yaml / config.example.yaml not found in {REPO} — run this inside the interest-memory repo")
+            sys.exit(1)
         if args.dry_run:
             say(f"[dry-run] cp {CONFIG_EXAMPLE} {CONFIG}")
         else:
