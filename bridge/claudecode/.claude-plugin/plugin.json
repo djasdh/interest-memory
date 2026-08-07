@@ -1,0 +1,12 @@
+{
+  "name": "interest-memory",
+  "displayName": "Interest Memory",
+  "version": "1.0.0",
+  "description": "interest-memory — per-turn recall injection (UserPromptSubmit) + session-end transcript ingest (SessionEnd) via a local Go memory service; memory_search / memory_logs MCP tools.",
+  "author": {
+    "name": "interest-memory"
+  },
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

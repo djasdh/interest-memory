@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "interest-memory": {
+      "command": "node",
+      "args": [
+        "/home/umr/Projects/agent-adapt/interest-memory/bridge/mcp-server/server.ts"
+      ],
+      "env": {
+        "INTEREST_AGENT": "claudecode"
+      }
+    }
+  }
+}

@@ -31,7 +31,85 @@ session. When `INTEREST_BASE_URL` is unset the bridge degrades to tools-only
 | Hermes | `bridge/hermes/` | `$HERMES_HOME/plugins/interest/` | MemoryProvider plugin |
 | opencode | `bridge/opencode/memory.ts` | `~/.config/opencode/plugin/memory.ts` | local plugin (`{id, server}`) |
 | openclaw | `bridge/openclaw/interest-memory/` | `<configDir>/extensions/interest-memory/` | native plugin |
-| pi | `bridge/pi/memory.ts` | `~/.pi/agent/extensions/memory.ts` | TS extension |
+| pi | `bridge/pi/memory.ts` | `~/.pi/agent/extensions/interest-memory/index.ts` | TS extension |
+| claudecode | `bridge/claudecode/` | `claude --plugin-dir bridge/claudecode` | plugin (`.claude-plugin/plugin.json`) |
+| codex | `bridge/codex/` | `~/.codex/hooks.json` + `~/.codex/config.toml` | plugin (`.codex-plugin/plugin.json`) / hooks |
+| reasonix | `bridge/reasonix/` | `reasonix plugin install bridge/reasonix --link --yes` | plugin (`reasonix-plugin.json`) |
+
+## MCP server (codex / claudecode / reasonix)
+
+`bridge/mcp-server/` is a shared Node MCP server exposing the consumer tools
+(`memory_search`, `memory_logs`) over MCP stdio. All three MCP clients point at
+it; the agent namespace comes from `INTEREST_AGENT` set in each client's MCP
+config.
+
+```bash
+cd bridge/mcp-server && npm install   # @modelcontextprotocol/sdk + zod
+```
+
+```jsonc
+// per-client MCP config
+{ "command": "node", "args": ["/abs/path/bridge/mcp-server/server.ts"],
+  "env": { "INTEREST_AGENT": "codex" /* claudecode | reasonix */ } }
+```
+
+Note: `server.ts` uses the SDK 1.30 `registerTool(name, config, cb)` signature
+(the old `(name, description, schema, cb)` form breaks tool calls with
+`typedHandler is not a function`).
+
+## claudecode
+
+```bash
+claude --plugin-dir /path/to/interest-memory/bridge/claudecode
+# or install via a marketplace / ~/.claude/plugins
+```
+
+- Recall injection via `UserPromptSubmit` hook (per turn; stdout injected).
+- Transcript push via `SessionEnd` hook (reads `transcript_path` jsonl).
+- Tools: MCP `memory_search` / `memory_logs` from the plugin's `.mcp.json`.
+- Plugin MCP tools are namespaced `mcp__plugin_interest-memory_interest-memory__*`
+  and need per-server approval (use `--dangerously-skip-permissions` to bypass).
+- Verified: `claude -p` fires SessionEnd and UserPromptSubmit hooks end-to-end.
+
+## codex
+
+Codex's plugin system is marketplace-driven (a marketplace root manifest is
+required for local install); the packaged plugin lives in
+`bridge/codex/.codex-plugin/plugin.json` for marketplace distribution. For a
+local setup, register the same hooks and MCP directly:
+
+```bash
+# hooks
+cp bridge/codex/hooks/hooks.json ~/.codex/hooks.json   # adjust script paths to absolute
+# MCP server
+# append to ~/.codex/config.toml:
+#   [mcp_servers.interest-memory]
+#   command = "node"
+#   args = ["/abs/path/bridge/mcp-server/server.ts"]
+#   env = { INTEREST_AGENT = "codex" }
+```
+
+- Recall injection via `UserPromptSubmit` hook (per turn; stdout injected).
+- Transcript push via `SessionEnd` hook (reads `~/.codex/sessions/*.jsonl`,
+  `response_item` format); hook timeout budget is 1–3s.
+- Tools: MCP `memory_search` / `memory_logs` (verified called from `codex exec`;
+  needs `--dangerously-bypass-approvals-and-sandbox` to reach localhost).
+- Hooks only fire in interactive REPL sessions (headless `codex exec` does not
+  run hooks — same as reasonix `run`).
+
+## reasonix
+
+```bash
+reasonix plugin install /path/to/interest-memory/bridge/reasonix --link --replace --yes
+```
+
+- Recall injection via `UserPromptSubmit` hook (per turn; stdout injected).
+- Transcript push via `SessionEnd` hook (reads the Reasonix session jsonl;
+  `transcript_path` from the hook event, or newest file under
+  `REASONIX_HOME`).
+- Tools: MCP `memory_search` / `memory_logs` (verified called from `reasonix run`).
+- Hooks only fire in interactive sessions (TUI / `reasonix serve` / desktop) —
+  headless `reasonix run` does not run hooks (verified).
 
 ## opencode
 
@@ -141,6 +219,10 @@ Dependency-free (node:test + tiny HTTP stub; no agent runtime needed):
 node --test bridge/opencode/memory-lib.test.mjs
 node --test bridge/openclaw/interest-memory/lib.test.mjs
 node --test bridge/pi/lib.test.mjs
+node --test bridge/mcp-server/lib.test.mjs
+node --test bridge/claudecode/hooks/lib.test.mjs
+node --test bridge/codex/hooks/lib.test.mjs
+node --test bridge/reasonix/hooks/lib.test.mjs
 ```
 
 Each `lib` module is importable without the agent runtime, so the pure logic

@@ -1,0 +1,19 @@
+{
+  "name": "@interest-memory/mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server exposing interest-memory consumer tools (memory_search / memory_logs) to MCP clients (codex, claude-code, reasonix).",
+  "type": "module",
+  "bin": {
+    "interest-memory-mcp": "./server.ts"
+  },
+  "scripts": {
+    "test": "node --test lib.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.24.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "interest-memory",
+  "version": "1.0.0",
+  "description": "interest-memory — per-turn recall injection (UserPromptSubmit) + session-end transcript ingest (SessionEnd) via a local Go memory service; memory_search / memory_logs MCP tools.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "command": "hooks/recall.mjs",
+        "args": [],
+        "description": "Inject interest-memory recall context"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "command": "hooks/ingest.mjs",
+        "args": [],
+        "description": "Push session transcript to interest-memory"
+      }
+    ]
+  },
+  "mcpServers": {
+    "interest-memory": {
+      "command": "/usr/bin/node",
+      "args": [
+        "/home/umr/Projects/agent-adapt/interest-memory/bridge/mcp-server/server.ts"
+      ],
+      "env": {
+        "INTEREST_AGENT": "reasonix"
+      }
+    }
+  }
+}

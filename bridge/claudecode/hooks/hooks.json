@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/recall.mjs",
+            "timeout": 30,
+            "env": {
+              "INTEREST_AGENT": "claudecode"
+            }
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/ingest.mjs",
+            "timeout": 60,
+            "env": {
+              "INTEREST_AGENT": "claudecode"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
