@@ -98,16 +98,20 @@ The plugin requires plugin API `>=2026.7.1` (verified against host
 ```
 
 - Recall injection via `before_prompt_build` (`prependContext`), deduped by
-  prompt text and reset on `agent_end` (the event carries no session id).
-- Transcript push via `agent_end` (complete `messages` in the event);
-  `session_end` only does cursor cleanup (2s drain budget — no heavy IO).
+  prompt text and reset on `before_agent_finalize` (the event carries no
+  session id).
+- Transcript ingest: `before_agent_finalize` caches the complete conversation
+  per session id (the only event with both a stable `sessionId` and full
+  `messages`); `session_end` pushes it once per session with that stable id,
+  so multi-turn conversations produce a single session transcript (no
+  per-run session fragmentation).
 - Tools are named **`interest_search`** / **`interest_logs`** (not
   `memory_*`) so they never collide with the bundled `memory-core` plugin.
 - Optional plugin config (`plugins.entries["interest-memory"].config`):
   `baseUrl`, `agent`, `timeoutMs` (overrides env).
-- Known limitation: `agent_end` has no stable session id, so ingest uses the
-  per-run `runId` — every agent run pushes an independent session transcript
-  (multi-turn conversations produce one session per turn).
+- Note: `session_end` fires when a session is replaced/timed out/reset or the
+  gateway stops, so transcripts are pushed at session close rather than per
+  turn (same contract as the pi bridge's `session_shutdown`).
 
 ## pi
 

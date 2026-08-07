@@ -2,8 +2,11 @@
  * interest-memory — OpenClaw native plugin.
  *
  * Bridges OpenClaw conversations to the local interest-memory REST service:
- *   - before_prompt_build: injects `GET /api/v1/{agent}/recall` context.
- *   - agent_end: pushes the full transcript to `POST /api/v1/{agent}/sessions`.
+ *   - before_prompt_build: injects `GET /api/v1/{agent}/recall` context
+ *     (deduped by prompt text; reset on before_agent_finalize).
+ *   - before_agent_finalize: caches the complete transcript per session id.
+ *   - session_end: pushes the cached transcript once per session to
+ *     `POST /api/v1/{agent}/sessions` with a stable session id.
  *   - consumer tools: `interest_search` (`GET /search`) and `interest_logs`
  *     (`GET /logs`). Named `interest_*` (not `memory_*`) so they never collide
  *     with the bundled memory-core plugin.
@@ -57,11 +60,16 @@ export default definePluginEntry({
   register(api) {
     const cfg: InterestConfig = resolveConfig();
     const agent = cfg.agent;
-    // Per-agent dedupe: {lastRecallKey} prevents repeated recall injection
-    // within a turn (the event has no session id, so the prompt is the key,
-    // reset on agent_end); {lastPushedKey} prevents re-ingesting the same
-    // transcript tail.
-    const states = new Map<string, { lastRecallKey: string; lastPushedKey: string }>();
+    // recallKeys: per-agent dedupe of recall injection (the event has no
+    // session id, so the prompt is the key; reset on before_agent_finalize).
+    // transcripts: per-sessionId cache of the latest complete transcript
+    // (from before_agent_finalize, which carries both sessionId and full
+    // messages — unlike agent_end, which has no session id).
+    // pushedKeys: per-sessionId dedupe so a repeated session_end for the same
+    // session (e.g. shutdown/restart) does not re-ingest.
+    const recallKeys = new Map<string, string>();
+    const transcripts = new Map<string, Array<{ role: string; content: string }>>();
+    const pushedKeys = new Map<string, string>();
 
     api.registerTool(
       () => ({
@@ -107,39 +115,46 @@ export default definePluginEntry({
     api.on("before_prompt_build", async (event) => {
       const query = event.prompt?.trim();
       if (!query) return undefined;
-      const st = states.get(agent) ?? { lastRecallKey: "", lastPushedKey: "" };
       const recallKey = query.slice(0, 200);
-      if (recallKey === st.lastRecallKey) return undefined;
-      st.lastRecallKey = recallKey;
-      states.set(agent, st);
+      if (recallKey === recallKeys.get(agent)) return undefined;
+      recallKeys.set(agent, recallKey);
       const ctx = await recall(cfg.baseUrl, agent, query, cfg.timeoutMs);
       if (!ctx) return undefined;
       return { prependContext: `<memory_context>\n${ctx}\n</memory_context>` };
     });
 
-    // ② session-end transcript ingest (complete messages are in the event).
-    api.on("agent_end", async (event) => {
+    // ② cache the complete transcript per session. Runs on run finalization
+    // (before the terminal delivery), so event.messages holds the full
+    // conversation and event.sessionId is stable across turns.
+    api.on("before_agent_finalize", (event) => {
       try {
-        const messages = (event.messages ?? []) as unknown[];
+        const messages = event.messages;
+        if (!Array.isArray(messages) || !messages.length) return;
         const turns = extractTurns(messages as never);
         if (!turns.length) return;
-        const sessionId = String(event.runId ?? "unknown");
-        const st = states.get(agent) ?? { lastRecallKey: "", lastPushedKey: "" };
-        const lastKey = `${turns.length}:${turns[turns.length - 1].content.slice(0, 200)}`;
-        if (lastKey === st.lastPushedKey) return;
-        st.lastPushedKey = lastKey;
         // Turn is over — allow a recall for the next user prompt.
-        st.lastRecallKey = "";
-        states.set(agent, st);
-        await ingest(cfg.baseUrl, agent, sessionId, turns, new Date().toISOString());
+        recallKeys.set(agent, "");
+        transcripts.set(event.sessionId, turns);
       } catch (err) {
-        api.logger.warn?.(`interest-memory: agent_end ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn?.(`interest-memory: before_agent_finalize cache failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
 
-    // ②b session_end: only cursor cleanup (2s drain budget — no heavy IO).
-    api.on("session_end", () => {
-      // Dedupe state lives per agentId; nothing heavy to clean up here.
+    // ②b session_end: push the cached transcript once per session with a
+    // stable session id. The event carries no messages, so the cache from
+    // before_agent_finalize is the source of truth.
+    api.on("session_end", async (event) => {
+      try {
+        const turns = transcripts.get(event.sessionId);
+        if (!turns?.length) return;
+        const lastKey = `${turns.length}:${turns[turns.length - 1].content.slice(0, 200)}`;
+        if (lastKey === pushedKeys.get(event.sessionId)) return;
+        pushedKeys.set(event.sessionId, lastKey);
+        await ingest(cfg.baseUrl, agent, event.sessionId, turns, new Date().toISOString());
+        transcripts.delete(event.sessionId);
+      } catch (err) {
+        api.logger.warn?.(`interest-memory: session_end ingest failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     });
   },
 });
