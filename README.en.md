@@ -22,7 +22,9 @@ Other memory systems need a server. This one needs a process.
 **What it does**
 
 - Session end: automatically extracts interest points → verifies → writes to the local knowledge base
-- Session start: recalls relevant memories → injects into context
+- Session start: recalls relevant memories → injects into context (concise entries only, full content on demand, minimal context pollution)
+- Multi-agent shared memory: one service for many agents (Hermes / OpenCode / Claude Code / Codex etc.), with isolated, fully-shared, or selective sharing
+- Full audit: every structural change is written to `change_log`, replayable
 - Every entry carries evidence (web URL / turn / query); subjective preferences are never stored as facts; contradictions are closed in a loop
 
 ## Quick start
@@ -64,14 +66,19 @@ curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts
 
 `session_transcripts` keeps full raw text — trim externally to bound disk growth; `fork.max_concurrency` / `verify.max_concurrency` cap peak memory.
 
-## Hermes integration
+## Integration
 
-```bash
-cp -r bridge/hermes $HERMES_HOME/plugins/interest/
-# env: INTEREST_BASE_URL=http://127.0.0.1:8899 INTEREST_AGENT=<profile>
-```
+Multiple agent frameworks are supported out of the box, sharing one env set (`INTEREST_BASE_URL` / `INTEREST_AGENT` / `INTEREST_TIMEOUT`); a down service never blocks a session:
 
-Plugin features: `prefetch` recall injection at session start, transcript push at session end, `memory_search` / `memory_logs` consumer tools.
+| Agent | Form |
+|---|---|
+| Hermes | MemoryProvider plugin (`$HERMES_HOME/plugins/interest/`) |
+| opencode | local plugin (`~/.config/opencode/plugin/memory.ts`) |
+| openclaw | native plugin (`<configDir>/extensions/interest-memory/`) |
+| pi | TS extension (`~/.pi/agent/extensions/interest-memory/`) |
+| claudecode / codex / reasonix | official plugin + shared MCP server (`bridge/mcp-server/`) |
+
+Every bridge offers the same capabilities: session-start recall injection, session-end transcript push, and `memory_search` / `memory_logs` consumer tools. See `bridge/README.md`.
 
 ## Architecture
 

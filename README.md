@@ -22,7 +22,9 @@
 **它能做什么**
 
 - 会话结束：自动提取兴趣点 → 核查 → 写入本地知识库
-- 会话开始：自动召回相关记忆 → 注入上下文
+- 会话开始：自动召回相关记忆 → 注入上下文（只给精简条目，完整内容按需查，最小化上下文污染）
+- 多 agent 共享：一个服务接多个 agent（Hermes / OpenCode / Claude Code / Codex 等），记忆可隔离、全共享、或按需互通
+- 全审计：每次结构化改动写入 `change_log`，可追溯回放
 - 每条记忆都带证据（网页 / 会话轮次 / 检索 query）；主观偏好不当作事实；矛盾闭环处理
 
 ## 快速开始
@@ -66,14 +68,19 @@ curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts
 
 `session_transcripts` 保留全文原文，想控磁盘增长可在外部定期清理；`fork.max_concurrency` / `verify.max_concurrency` 可压低峰值内存。
 
-## 接入 Hermes
+## 接入
 
-```bash
-cp -r bridge/hermes $HERMES_HOME/plugins/interest/
-# env: INTEREST_BASE_URL=http://127.0.0.1:8899 INTEREST_AGENT=<profile>
-```
+现已接入多个 agent 框架，共用一套 env（`INTEREST_BASE_URL` / `INTEREST_AGENT` / `INTEREST_TIMEOUT`），服务挂了不阻塞会话：
 
-插件能力：会话开始 `prefetch` 召回注入、会话结束推转录、消费端 `memory_search` / `memory_logs` 工具。
+| Agent | 接入形态 |
+|---|---|
+| Hermes | MemoryProvider 插件（`$HERMES_HOME/plugins/interest/`） |
+| opencode | 本地插件（`~/.config/opencode/plugin/memory.ts`） |
+| openclaw | 原生插件（`<configDir>/extensions/interest-memory/`） |
+| pi | TS 扩展（`~/.pi/agent/extensions/interest-memory/`） |
+| claudecode / codex / reasonix | 官方插件 + 共享 MCP server（`bridge/mcp-server/`） |
+
+所有桥接能力一致：会话开始召回注入、会话结束推转录、消费端 `memory_search` / `memory_logs` 工具。详见 `bridge/README.md`。
 
 ## 架构
 
