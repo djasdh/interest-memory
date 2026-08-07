@@ -38,6 +38,11 @@ Consumer tools: memory_search (query/id + full content + edges) / memory_logs (c
 **Prerequisites**: Go 1.22+, CGO (static sqlite-vec), DeepSeek + SiliconFlow API keys.
 
 ```bash
+# 0. One-shot installer (guided wizard: build server + provider config + optional agent bridges)
+bash scripts/install.sh
+#    install.sh checks/auto-installs deps per distro (python/go/node/npm/curl), then starts the TUI
+#    Options: --dry-run prints steps | --noninteractive uses defaults | --server-only configures the server only | --systemd registers autostart
+
 # 1. Build (single binary)
 go build ./cmd/server
 

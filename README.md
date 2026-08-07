@@ -38,6 +38,11 @@
 **前置**：Go 1.22+、CGO（sqlite-vec 静态链接）、DeepSeek + SiliconFlow API key。
 
 ```bash
+# 0. 一键安装（引导式向导：构建服务端 + 供应商配置 + 可选 agent bridge）
+bash scripts/install.sh
+#    install.sh 会按发行版检查/自动安装依赖（python/go/node/npm/curl），再进入 TUI
+#    可选参数：--dry-run 只打印步骤 | --noninteractive 全默认 | --server-only 只配服务端 | --systemd 注册开机自启
+
 # 1. 构建（单二进制）
 go build ./cmd/server
 

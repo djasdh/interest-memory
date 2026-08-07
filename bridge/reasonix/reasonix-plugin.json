@@ -22,7 +22,7 @@
     "interest-memory": {
       "command": "/usr/bin/node",
       "args": [
-        "/home/umr/Projects/agent-adapt/interest-memory/bridge/mcp-server/server.ts"
+        "__INTEREST_REPO__/bridge/mcp-server/server.ts"
       ],
       "env": {
         "INTEREST_AGENT": "reasonix"
