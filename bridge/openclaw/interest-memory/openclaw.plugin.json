@@ -1,0 +1,30 @@
+{
+  "id": "interest-memory",
+  "name": "Interest Memory",
+  "description": "interest-memory — session-start recall injection + session-end transcript ingest via a local Go memory service (interest_search / interest_logs tools).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "interest-memory service base URL (default: http://127.0.0.1:8899)"
+      },
+      "agent": {
+        "type": "string",
+        "description": "agent namespace for /api/v1/{agent}/... (default: OpenClaw agentId)"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "per-request timeout ms (default: 8000)"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["interest_search", "interest_logs"]
+  }
+}
