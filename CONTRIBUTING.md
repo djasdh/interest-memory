@@ -4,6 +4,11 @@ Thanks for considering contributing to interest-memory! This project is a
 small, self-hosted memory service, and contributions that respect its design
 constraints are very welcome.
 
+## Quality over origin
+
+Contributions are welcome whether written by a human or an AI — quality is
+what counts.
+
 ## Design principles
 
 Please read `README.md` first. A few things matter when touching code:
