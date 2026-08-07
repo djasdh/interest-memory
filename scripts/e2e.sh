@@ -4,7 +4,7 @@
 # against the real service with real LLM providers.
 #
 # Providers:
-#   LLM:        DeepSeek (OpenAI-compatible)  — requires DEEPSEEK_API_KEY
+#   LLM:        OpenAI-compatible (DeepSeek etc.) — requires LLM_API_KEY
 #   embedding:  SiliconFlow BAAI/bge-m3 (free) — requires SILICONFLOW_API_KEY
 #
 # Usage: bash scripts/e2e.sh
@@ -35,7 +35,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- 1. key checks ---------------------------------------------------------
-[[ -n "${DEEPSEEK_API_KEY:-}" ]] || die "DEEPSEEK_API_KEY not set"
+[[ -n "${LLM_API_KEY:-}" ]] || die "LLM_API_KEY not set"
 [[ -n "${SILICONFLOW_API_KEY:-}" ]] || die "SILICONFLOW_API_KEY not set"
 
 # ---- 2. temporary config ---------------------------------------------------
@@ -46,7 +46,7 @@ server:
   db_path: $DB_PATH
 llm:
   base_url: https://api.deepseek.com/v1
-  api_key_env: DEEPSEEK_API_KEY
+  api_key_env: LLM_API_KEY
   model: deepseek-chat
   max_tokens: 4096
 embedding:

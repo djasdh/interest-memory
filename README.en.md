@@ -1,5 +1,7 @@
 English | [中文](README.md)
 
+![interest-memory](assets/banner.png)
+
 # interest-memory — Interest-Point Memory Service
 
 A standalone Go memory service: at session end it extracts interest points from a conversation, verifies/cleans them, and writes them into a wiki with bidirectional links; at session start it recalls and injects context via RAG. Provides long-term memory for consumer agents such as Hermes.
@@ -50,7 +52,7 @@ go build ./cmd/server
 cp config.example.yaml config.yaml
 # Edit config.yaml: LLM (default DeepSeek), embedding (default SiliconFlow BAAI/bge-m3)
 # Provide keys via environment variables
-export DEEPSEEK_API_KEY=...     # LLM extraction / verification / writing
+export LLM_API_KEY=...         # LLM extraction / verification / writing
 export SILICONFLOW_API_KEY=...  # embedding (BAAI/bge-m3, 1024 dims)
 
 # 3. Run (default :8899)
@@ -130,7 +132,7 @@ CGO_ENABLED=1 go test -race ./...
 # Hermes plugin
 python3 bridge/hermes/test_interest.py
 
-# End-to-end (requires DEEPSEEK_API_KEY + SILICONFLOW_API_KEY)
+# End-to-end (requires LLM_API_KEY + SILICONFLOW_API_KEY)
 bash scripts/e2e.sh
 ```
 

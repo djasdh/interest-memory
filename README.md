@@ -1,5 +1,7 @@
 [English](README.en.md) | 中文
 
+![interest-memory](assets/banner.png)
+
 # interest-memory — 兴趣点记忆服务
 
 独立 Go 记忆服务：会话末从对话中提取兴趣点，经核查/清洗后写入 wiki 双链知识库；会话开始 RAG 召回注入上下文。支撑 Hermes 等消费 agent 的长期记忆。
@@ -50,7 +52,7 @@ go build ./cmd/server
 cp config.example.yaml config.yaml
 # 编辑 config.yaml：LLM（默认 DeepSeek）、embedding（默认 SiliconFlow BAAI/bge-m3）
 # 从环境变量提供密钥
-export DEEPSEEK_API_KEY=...     # LLM 核查/提取/写入
+export LLM_API_KEY=...         # LLM 核查/提取/写入
 export SILICONFLOW_API_KEY=...  # embedding（BAAI/bge-m3, 1024 维）
 
 # 3. 运行（默认 :8899）
@@ -150,7 +152,7 @@ CGO_ENABLED=1 go test -race ./...
 # Hermes 插件
 python3 bridge/hermes/test_interest.py
 
-# 端到端（需 DEEPSEEK_API_KEY + SILICONFLOW_API_KEY）
+# 端到端（需 LLM_API_KEY + SILICONFLOW_API_KEY）
 bash scripts/e2e.sh
 ```
 
