@@ -31,11 +31,6 @@ jobs:
             goos: linux
             goarch: arm64
             ext: ""
-          - target: darwin-amd64
-            runner: macos-13
-            goos: darwin
-            goarch: amd64
-            ext: ""
           - target: darwin-arm64
             runner: macos-14
             goos: darwin
