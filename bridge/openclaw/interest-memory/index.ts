@@ -58,7 +58,7 @@ export default definePluginEntry({
     },
   }),
   register(api) {
-    const cfg: InterestConfig = resolveConfig();
+    const cfg: InterestConfig = resolveConfig(api.pluginConfig);
     const agent = cfg.agent;
     // recallKeys: per-agent dedupe of recall injection (the event has no
     // session id, so the prompt is the key; reset on before_agent_finalize).

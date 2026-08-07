@@ -11,13 +11,21 @@ export interface InterestConfig {
   agent: string;
 }
 
-export function resolveConfig(env: Record<string, string | undefined> = process.env): InterestConfig {
-  const raw = env.INTEREST_TIMEOUT;
-  const t = raw ? Number(raw) : 8;
+export function resolveConfig(
+  pluginConfig?: Record<string, unknown>,
+  env: Record<string, string | undefined> = process.env,
+): InterestConfig {
+  const rawTimeout = env.INTEREST_TIMEOUT;
+  const t = rawTimeout ? Number(rawTimeout) : 8;
+  const p = (pluginConfig ?? {}) as Record<string, unknown>;
+  const cfgAgent = typeof p.agent === "string" && p.agent.trim() ? p.agent : "";
+  const cfgBase = typeof p.baseUrl === "string" && p.baseUrl.trim() ? p.baseUrl : "";
+  // pluginConfig.timeoutMs is already in milliseconds (config schema says "timeout ms").
+  const cfgTimeout = typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs) && p.timeoutMs > 0 ? p.timeoutMs : 0;
   return {
-    baseUrl: (env.INTEREST_BASE_URL || "http://127.0.0.1:8899").replace(/\/+$/, ""),
-    timeoutMs: (Number.isFinite(t) && t > 0 ? t : 8) * 1000,
-    agent: env.INTEREST_AGENT || "default",
+    baseUrl: (cfgBase || env.INTEREST_BASE_URL || "http://127.0.0.1:8899").replace(/\/+$/, ""),
+    timeoutMs: cfgTimeout || (Number.isFinite(t) && t > 0 ? t : 8) * 1000,
+    agent: cfgAgent || env.INTEREST_AGENT || "default",
   };
 }
 

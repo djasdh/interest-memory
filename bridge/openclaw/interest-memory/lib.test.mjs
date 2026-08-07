@@ -20,17 +20,47 @@ import {
 } from "./lib.ts";
 
 test("resolveConfig defaults", () => {
-  const cfg = resolveConfig({});
+  const cfg = resolveConfig(undefined, {});
   assert.equal(cfg.baseUrl, "http://127.0.0.1:8899");
   assert.equal(cfg.agent, "default");
   assert.equal(cfg.timeoutMs, 8000);
 });
 
 test("resolveConfig reads env", () => {
-  const cfg = resolveConfig({ INTEREST_BASE_URL: "http://x:9/", INTEREST_AGENT: "a1", INTEREST_TIMEOUT: "3" });
+  const cfg = resolveConfig(undefined, { INTEREST_BASE_URL: "http://x:9/", INTEREST_AGENT: "a1", INTEREST_TIMEOUT: "3" });
   assert.equal(cfg.baseUrl, "http://x:9");
   assert.equal(cfg.agent, "a1");
   assert.equal(cfg.timeoutMs, 3000);
+});
+
+test("resolveConfig pluginConfig overrides env", () => {
+  const cfg = resolveConfig(
+    { baseUrl: "http://cfg:9/", agent: "openclaw-prod", timeoutMs: 5000 },
+    { INTEREST_BASE_URL: "http://env:8/", INTEREST_AGENT: "env-agent", INTEREST_TIMEOUT: "2" },
+  );
+  assert.equal(cfg.baseUrl, "http://cfg:9");
+  assert.equal(cfg.agent, "openclaw-prod");
+  assert.equal(cfg.timeoutMs, 5000);
+});
+
+test("resolveConfig pluginConfig falls back to env for missing fields", () => {
+  const cfg = resolveConfig(
+    { agent: "openclaw-a" },
+    { INTEREST_BASE_URL: "http://env:8/", INTEREST_TIMEOUT: "2" },
+  );
+  assert.equal(cfg.baseUrl, "http://env:8");
+  assert.equal(cfg.agent, "openclaw-a");
+  assert.equal(cfg.timeoutMs, 2000);
+});
+
+test("resolveConfig pluginConfig empty strings fall back to env", () => {
+  const cfg = resolveConfig(
+    { agent: "  ", baseUrl: "", timeoutMs: 0 },
+    { INTEREST_AGENT: "env-agent" },
+  );
+  assert.equal(cfg.agent, "env-agent");
+  assert.equal(cfg.baseUrl, "http://127.0.0.1:8899");
+  assert.equal(cfg.timeoutMs, 8000);
 });
 
 test("textOf handles string and structured content", () => {
