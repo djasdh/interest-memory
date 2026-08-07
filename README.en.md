@@ -76,7 +76,9 @@ Multiple agent frameworks are supported out of the box, sharing one env set (`IN
 | opencode | local plugin (`~/.config/opencode/plugin/memory.ts`) |
 | openclaw | native plugin (`<configDir>/extensions/interest-memory/`) |
 | pi | TS extension (`~/.pi/agent/extensions/interest-memory/`) |
-| claudecode / codex / reasonix | official plugin + shared MCP server (`bridge/mcp-server/`) |
+| Claude Code | official plugin + MCP (`claude --plugin-dir bridge/claudecode`) |
+| Codex | official plugin / hooks + MCP (`~/.codex/hooks.json`) |
+| Reasonix | official plugin + MCP (`reasonix plugin install bridge/reasonix --link`) |
 
 Every bridge offers the same capabilities: session-start recall injection, session-end transcript push, and `memory_search` / `memory_logs` consumer tools. See `bridge/README.md`.
 

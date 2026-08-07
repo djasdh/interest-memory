@@ -78,7 +78,9 @@ curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts
 | opencode | 本地插件（`~/.config/opencode/plugin/memory.ts`） |
 | openclaw | 原生插件（`<configDir>/extensions/interest-memory/`） |
 | pi | TS 扩展（`~/.pi/agent/extensions/interest-memory/`） |
-| claudecode / codex / reasonix | 官方插件 + 共享 MCP server（`bridge/mcp-server/`） |
+| Claude Code | 官方插件 + MCP（`claude --plugin-dir bridge/claudecode`） |
+| Codex | 官方插件 / hooks + MCP（`~/.codex/hooks.json`） |
+| Reasonix | 官方插件 + MCP（`reasonix plugin install bridge/reasonix --link`） |
 
 所有桥接能力一致：会话开始召回注入、会话结束推转录、消费端 `memory_search` / `memory_logs` 工具。详见 `bridge/README.md`。
 
