@@ -639,3 +639,54 @@ func TestListUnprocessedTranscripts(t *testing.T) {
 		t.Fatalf("unprocessed after mark = %+v", list)
 	}
 }
+
+func TestListAgentIDsDistinct(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// No data → empty.
+	ids, err := s.ListAgentIDs(ctx)
+	if err != nil {
+		t.Fatalf("ListAgentIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("empty store agent ids = %v, want []", ids)
+	}
+
+	mkIP := func(id, agent string) InterestPoint {
+		return InterestPoint{ID: id, AgentID: agent, Name: "n-" + id, Status: "active"}
+	}
+	mkPage := func(id, agent string) Page {
+		return Page{ID: id, AgentID: agent, Title: "t-" + id, Status: "active"}
+	}
+	if err := s.UpsertInterestPoint(ctx, mkIP("a1", "agent-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertInterestPoint(ctx, mkIP("a2", "agent-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertInterestPoint(ctx, mkIP("b1", "agent-b")); err != nil {
+		t.Fatal(err)
+	}
+	// wiki page only in agent-c (distinct union across both tables).
+	if err := s.UpsertPage(ctx, mkPage("p1", "agent-c")); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err = s.ListAgentIDs(ctx)
+	if err != nil {
+		t.Fatalf("ListAgentIDs: %v", err)
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	for _, want := range []string{"agent-a", "agent-b", "agent-c"} {
+		if !got[want] {
+			t.Errorf("missing agent %q in %v", want, ids)
+		}
+	}
+	if len(ids) != 3 {
+		t.Errorf("agent ids = %v, want exactly 3 distinct", ids)
+	}
+}

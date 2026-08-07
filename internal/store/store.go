@@ -69,5 +69,10 @@ type Store interface {
 	SetLogRetain(ctx context.Context, agentID string, n int) error
 	SetLogRetainDefault(ctx context.Context, n int) error
 
+	// ListAgentIDs returns the distinct namespaces that have persisted data
+	// (interest points or wiki pages). Used for the "all" namespace-sharing
+	// mode to discover the full namespace set dynamically.
+	ListAgentIDs(ctx context.Context) ([]string, error)
+
 	Close() error
 }

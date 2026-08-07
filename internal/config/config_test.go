@@ -116,6 +116,78 @@ verify:
 	}
 }
 
+func TestNamespacesDefaultIsolated(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Namespaces.Mode != NamespaceIsolated {
+		t.Errorf("default namespaces.mode = %q, want isolated", cfg.Namespaces.Mode)
+	}
+	if len(cfg.Namespaces.VisibleTo) != 0 {
+		t.Errorf("default visible_to should be empty, got %v", cfg.Namespaces.VisibleTo)
+	}
+}
+
+func TestNamespacesLoadModes(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+
+	content := `
+namespaces:
+  mode: all
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load all-mode error: %v", err)
+	}
+	if cfg.Namespaces.Mode != NamespaceAll {
+		t.Errorf("mode = %q, want all", cfg.Namespaces.Mode)
+	}
+
+	content = `
+namespaces:
+  mode: custom
+  visible_to:
+    codex: [opencode, pi]
+    claudecode: [reasonix]
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load custom-mode error: %v", err)
+	}
+	if cfg.Namespaces.Mode != NamespaceCustom {
+		t.Errorf("mode = %q, want custom", cfg.Namespaces.Mode)
+	}
+	if got := cfg.Namespaces.VisibleTo["codex"]; len(got) != 2 || got[0] != "opencode" || got[1] != "pi" {
+		t.Errorf("visible_to[codex] = %v, want [opencode pi]", got)
+	}
+	if got := cfg.Namespaces.VisibleTo["claudecode"]; len(got) != 1 || got[0] != "reasonix" {
+		t.Errorf("visible_to[claudecode] = %v, want [reasonix]", got)
+	}
+}
+
+func TestNamespacesInvalidModeRejected(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	content := `
+namespaces:
+  mode: everything
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for invalid namespaces.mode")
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	got := expandHome("~/x/y.db")

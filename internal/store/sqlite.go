@@ -205,6 +205,30 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	return nil
 }
 
+// ListAgentIDs returns the distinct namespaces that have persisted interest
+// points or wiki pages (empty entries are skipped). Used by the "all"
+// namespace-sharing mode.
+func (s *SQLiteStore) ListAgentIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT agent_id FROM interest_points UNION SELECT agent_id FROM wiki_pages`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list agent ids: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	seen := map[string]bool{}
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		if a != "" && !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	return out, rows.Err()
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 func marshalJSON(v any) string {

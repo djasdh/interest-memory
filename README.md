@@ -70,6 +70,26 @@ bash scripts/e2e.sh
 | GET | `/api/v1/{agent}/stats` | 统计 |
 | GET | `/api/health` | 健康检查 |
 
+## 命名空间与互通
+
+每个 agent（`{agent}` 路径段 / `INTEREST_AGENT`）拥有独立命名空间：全部数据
+表与向量索引按 `agent_id` 隔离，写入始终只进本空间。
+
+读取侧（`recall` / `search` / 按 `id` 查询）的互通通过 `namespaces` 配置切换：
+
+```yaml
+namespaces:
+  mode: isolated   # isolated（默认，不互通）| all（全部互通）| custom（指定互通）
+  visible_to:      # 仅 custom：单向可见声明
+    codex: [opencode, pi]
+```
+
+- `isolated`：每个 agent 只读自己的记忆（默认，无配置即现状）
+- `all`：每个 agent 读取所有命名空间（服务端动态发现全集）
+- `custom`：按 `visible_to` 单向声明（A 可读 B，B 不自动读 A）
+- 互通时结果标注来源：`recall` 文本行尾 `[来源: <agent>]`，`search`/`get` 的 `result.agent` 字段
+- `logs` / `stats` 始终归属本空间，不参与互通
+
 ## Hermes 接入
 
 部署插件到 Hermes 插件目录：

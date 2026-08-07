@@ -58,3 +58,15 @@ search:
 # 改动日志（change_log）
 log:
   retain: 0                   # 每 agent 保留日志条数上限（0=无限增长）
+
+# 命名空间互通（读侧；写入始终隔离）。默认 isolated：每个 agent 只读自己的记忆。
+#   isolated — 不互通（默认）
+#   all      — 每个 agent 可读取所有命名空间（服务端动态发现）
+#   custom   — 按 visible_to 单向声明：agent → 可读取的命名空间列表
+# 互通时 recall/search/get 的结果会标注来源命名空间（[来源: <agent>] / result.agent）。
+namespaces:
+  mode: isolated
+  # visible_to:                # 仅 custom 模式生效
+  #   codex: [opencode, pi]
+  #   claudecode: [reasonix]
+

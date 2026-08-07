@@ -3,6 +3,7 @@ package recall
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -85,6 +86,7 @@ type Result struct {
 	BodyMD      string            `json:"body_md"` // 页正文或兴趣点摘要（按 max_body_len 截断）
 	Status      string            `json:"status"`
 	Subjective  bool              `json:"subjective,omitempty"`
+	Agent       string            `json:"agent,omitempty"` // 来源命名空间（互通模式标注；isolated 为空）
 	Claims      []store.Claim     `json:"claims,omitempty"`
 	Evidence    []store.Evidence  `json:"evidence,omitempty"`
 	Reliability store.Reliability `json:"reliability"`
@@ -110,11 +112,94 @@ type service struct {
 	vec      VectorIndex
 	store    Store
 	grader   Grader
+	// resolver decides which namespaces one read request may see (the agent's
+	// own namespace included). nil → isolated (self only). When set, results
+	// are annotated with their source namespace.
+	resolver NamespaceResolver
+	annotate bool
 }
 
-// New builds the recall service.
-func New(embedder Embedder, vi VectorIndex, st Store, grader Grader) RecallService {
-	return &service{embedder: embedder, vec: vi, store: st, grader: grader}
+// NamespaceResolver returns the namespaces an agent may read for a request
+// (the agent's own namespace included). It is resolved per request so the set
+// can be dynamic (e.g. the "all" mode discovers namespaces from the store).
+type NamespaceResolver func(ctx context.Context, agentID string) ([]string, error)
+
+// New builds the recall service. Pass an optional NamespaceResolver to enable
+// cross-namespace reads (results get annotated with their source namespace);
+// with no resolver the service reads only the agent's own namespace (isolated).
+func New(embedder Embedder, vi VectorIndex, st Store, grader Grader, resolvers ...NamespaceResolver) RecallService {
+	s := &service{embedder: embedder, vec: vi, store: st, grader: grader}
+	if len(resolvers) > 0 && resolvers[0] != nil {
+		s.resolver = resolvers[0]
+		s.annotate = true
+	}
+	return s
+}
+
+// visible returns the ordered set of namespaces to read for agentID: its own
+// namespace first, then the resolver-provided ones (deduped).
+func (s *service) visible(ctx context.Context, agentID string) []string {
+	if s.resolver == nil {
+		return []string{agentID}
+	}
+	ns, err := s.resolver(ctx, agentID)
+	if err != nil || len(ns) == 0 {
+		return []string{agentID}
+	}
+	seen := map[string]bool{agentID: true}
+	out := []string{agentID}
+	for _, n := range ns {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// dedupeHits drops duplicate (agent, id) pairs, keeping the first occurrence
+// (callers sort by score before deduping so the highest score survives).
+func dedupeHits(hits []vec.Hit) []vec.Hit {
+	seen := map[string]bool{}
+	out := hits[:0]
+	for _, h := range hits {
+		key := h.AgentID + "\x00" + h.ID
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// gradeByAgent grades hits grouped by their source agent (the grader is
+// single-namespace scoped).
+func (s *service) gradeByAgent(ctx context.Context, hits []vec.Hit) ([]verify.Graded, error) {
+	byAgent := map[string][]vec.Hit{}
+	var order []string
+	for _, h := range hits {
+		key := h.AgentID
+		if key == "" {
+			key = "\x00"
+		}
+		if _, ok := byAgent[key]; !ok {
+			order = append(order, key)
+		}
+		byAgent[key] = append(byAgent[key], h)
+	}
+	var graded []verify.Graded
+	for _, key := range order {
+		agent := key
+		if key == "\x00" {
+			agent = ""
+		}
+		gs, err := s.grader.GradeForRecall(ctx, agent, byAgent[key])
+		if err != nil {
+			return nil, fmt.Errorf("recall: grade: %w", err)
+		}
+		graded = append(graded, gs...)
+	}
+	return graded, nil
 }
 
 // Recall embeds the query, retrieves interest points + wiki pages by vector
@@ -128,20 +213,41 @@ func (s *service) Recall(ctx context.Context, agentID, query string, opts Option
 		opts.TopK = 8
 	}
 
-	hits, err := s.retrieve(ctx, agentID, query, opts)
+	// Retrieve across every visible namespace, then merge (dedupe by
+	// agent+id), re-rank globally and cap to TopK.
+	var all []vec.Hit
+	for _, ns := range s.visible(ctx, agentID) {
+		hits, err := s.retrieve(ctx, ns, query, opts)
+		if err != nil {
+			return "", err
+		}
+		all = append(all, hits...)
+	}
+	if len(all) == 0 {
+		return "", nil
+	}
+	all = dedupeHits(all)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Score > all[j].Score })
+	if len(all) > opts.TopK {
+		all = all[:opts.TopK]
+	}
+
+	graded, err := s.gradeByAgent(ctx, all)
 	if err != nil {
 		return "", err
 	}
-	if len(hits) == 0 {
-		return "", nil
-	}
 
-	graded, err := s.grader.GradeForRecall(ctx, agentID, hits)
-	if err != nil {
-		return "", fmt.Errorf("recall: grade: %w", err)
-	}
+	return s.assembleContext(graded), nil
+}
 
-	return assemble(graded), nil
+// assembleContext renders graded hits, annotating each with its source
+// namespace when cross-namespace reads are enabled.
+func (s *service) assembleContext(graded []verify.Graded) string {
+	var b strings.Builder
+	for _, g := range graded {
+		b.WriteString(renderOneWithSource(g, s.annotate))
+	}
+	return b.String()
 }
 
 // retrieve runs vector search then keyword fallback, merging and re-ranking.
@@ -270,18 +376,14 @@ func (s *service) fullTextFallback(ctx context.Context, agentID, query string, t
 	return out, nil
 }
 
-// assemble renders the recalled context as bare text. The Hermes plugin
-// re-wraps it in <memory-context> (build_memory_context_block), so we must
-// NOT emit the fence here (stage 6 decision: 服务端返回裸文本).
-func assemble(graded []verify.Graded) string {
-	var b strings.Builder
-	for _, g := range graded {
-		b.WriteString(renderOne(g))
-	}
-	return b.String()
+// renderOne renders one graded recall line (no source annotation).
+func renderOne(g verify.Graded) string {
+	return renderOneWithSource(g, false)
 }
 
-func renderOne(g verify.Graded) string {
+// renderOneWithSource renders one graded recall line; when annotate is true
+// and the hit carries a source agent, it appends `[来源: <agent>]`.
+func renderOneWithSource(g verify.Graded, annotate bool) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("- [%s] %s [%s]", g.Hit.ID, titleOf(g), g.Hit.Kind))
 	if !g.EventTime.IsZero() {
@@ -295,6 +397,9 @@ func renderOne(g verify.Graded) string {
 	}
 	if g.Note != "" {
 		b.WriteString(" — " + g.Note)
+	}
+	if annotate && g.Hit.AgentID != "" {
+		b.WriteString(fmt.Sprintf(" [来源: %s]", g.Hit.AgentID))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -317,6 +422,37 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 	if topK <= 0 {
 		topK = 3
 	}
+	var all []vec.Hit
+	for _, ns := range s.visible(ctx, agentID) {
+		all = append(all, s.searchHits(ctx, ns, query, topK)...)
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+	all = dedupeHits(all)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Score > all[j].Score })
+	if len(all) > topK {
+		all = all[:topK]
+	}
+	var out []Result
+	for _, h := range all {
+		r, err := s.resultFor(ctx, h.AgentID, h, maxBodyLen)
+		if err != nil {
+			return nil, err
+		}
+		if r != nil {
+			if s.annotate && h.AgentID != "" {
+				r.Agent = h.AgentID
+			}
+			out = append(out, *r)
+		}
+	}
+	return out, nil
+}
+
+// searchHits runs the retrieval chain for one namespace: vector search, then
+// vector-keyword, then store full-text fallback (first non-empty wins).
+func (s *service) searchHits(ctx context.Context, agentID, query string, topK int) []vec.Hit {
 	var hits []vec.Hit
 	if s.embedder != nil && s.vec != nil {
 		q, err := s.embedder.Embed(ctx, query)
@@ -330,8 +466,6 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 			hits = kw
 		}
 	}
-	// Double insurance: store full-text LIKE search when vector + vector-keyword
-	// both miss (SQLiteVec.SearchByKeywords is a no-op).
 	if len(hits) == 0 {
 		ft, ferr := s.fullTextFallback(ctx, agentID, query, topK)
 		if ferr == nil && len(ft) > 0 {
@@ -341,27 +475,35 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 	if len(hits) > topK {
 		hits = hits[:topK]
 	}
-	var out []Result
-	for _, h := range hits {
-		r, err := s.resultFor(ctx, agentID, h, maxBodyLen)
-		if err != nil {
-			return nil, err
-		}
-		if r != nil {
-			out = append(out, *r)
-		}
-	}
-	return out, nil
+	return hits
 }
 
 // GetByID returns one entity with full content + edges, or nil when unknown.
-// Archived/superseded entities are returned with their status and a
+// Looks across every visible namespace (the agent's own first), returning the
+// first hit. Archived/superseded entities are returned with their status and a
 // replacement ref so the consumer can confirm what superseded them (unlike
 // Search, which silently substitutes the replacement).
 func (s *service) GetByID(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, nil
 	}
+	for _, ns := range s.visible(ctx, agentID) {
+		r, err := s.getByIDIn(ctx, ns, id, maxBodyLen)
+		if err != nil {
+			return nil, err
+		}
+		if r != nil {
+			if s.annotate {
+				r.Agent = ns
+			}
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// getByIDIn resolves one entity within a single namespace.
+func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error) {
 	if p, err := s.store.GetInterestPoint(ctx, agentID, id); err == nil && p != nil {
 		// Archived: surface the record itself with its status + replacement.
 		if p.Status == "archived" {

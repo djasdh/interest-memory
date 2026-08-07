@@ -565,3 +565,179 @@ func TestFullTextFallbackCarriesTitleMeta(t *testing.T) {
 		t.Errorf("fallback hit titles = %v, want ip-ft→Go 并发模型 / pg-ft→并发编程", titles)
 	}
 }
+
+// ── namespace sharing (cross-agent) tests ──────────────────────────────────
+
+// agentVec returns per-agent hits from a map (recall.VectorIndex).
+type agentVec struct{ byAgent map[string][]vec.Hit }
+
+func (m *agentVec) Search(_ context.Context, agent string, _ []float32, _ int) ([]vec.Hit, error) {
+	return m.byAgent[agent], nil
+}
+func (m *agentVec) SearchByKeywords(_ context.Context, agent, _ string, _ int) ([]vec.Hit, error) {
+	return m.byAgent[agent], nil
+}
+
+// agentStore delegates to per-agent fakeStore instances (recall.Store).
+type agentStore struct{ byAgent map[string]*fakeStore }
+
+func (m *agentStore) fs(agent string) *fakeStore {
+	if m.byAgent == nil {
+		m.byAgent = map[string]*fakeStore{}
+	}
+	if m.byAgent[agent] == nil {
+		m.byAgent[agent] = &fakeStore{
+			ips: map[string]*store.InterestPoint{}, pgs: map[string]*store.Page{},
+			outs: map[string][]store.Edge{}, ins: map[string][]store.Edge{},
+		}
+	}
+	return m.byAgent[agent]
+}
+func (m *agentStore) GetInterestPoint(ctx context.Context, agent, id string) (*store.InterestPoint, error) {
+	return m.fs(agent).GetInterestPoint(ctx, agent, id)
+}
+func (m *agentStore) GetPage(ctx context.Context, agent, id string) (*store.Page, error) {
+	return m.fs(agent).GetPage(ctx, agent, id)
+}
+func (m *agentStore) Outlinks(ctx context.Context, agent, id string) ([]store.Edge, error) {
+	return m.fs(agent).Outlinks(ctx, agent, id)
+}
+func (m *agentStore) Backlinks(ctx context.Context, agent, id string) ([]store.Edge, error) {
+	return m.fs(agent).Backlinks(ctx, agent, id)
+}
+func (m *agentStore) SearchInterestPointsByKeywords(ctx context.Context, agent, query string, limit int) ([]store.InterestPoint, error) {
+	return m.fs(agent).SearchInterestPointsByKeywords(ctx, agent, query, limit)
+}
+func (m *agentStore) SearchPagesByKeywords(ctx context.Context, agent, query string, limit int) ([]store.Page, error) {
+	return m.fs(agent).SearchPagesByKeywords(ctx, agent, query, limit)
+}
+func (m *agentStore) ResolveReplacement(ctx context.Context, agent, id string) (*store.Replacement, error) {
+	return m.fs(agent).ResolveReplacement(ctx, agent, id)
+}
+
+// nsResolver returns a NamespaceResolver exposing a fixed per-agent visible set.
+func nsResolver(visible map[string][]string) NamespaceResolver {
+	return func(_ context.Context, agentID string) ([]string, error) {
+		return visible[agentID], nil
+	}
+}
+
+func TestRecallAcrossNamespacesAnnotatesSource(t *testing.T) {
+	mv := &agentVec{byAgent: map[string][]vec.Hit{
+		"agent-a": {{ID: "ip-a", AgentID: "agent-a", Kind: "interest_point", Score: 0.9}},
+		"agent-b": {{ID: "ip-b", AgentID: "agent-b", Kind: "interest_point", Score: 0.8}},
+	}}
+	ms := &agentStore{}
+	ms.fs("agent-a").ips["ip-a"] = &store.InterestPoint{ID: "ip-a", AgentID: "agent-a", Name: "A"}
+	ms.fs("agent-b").ips["ip-b"] = &store.InterestPoint{ID: "ip-b", AgentID: "agent-b", Name: "B"}
+
+	s := New(fakeEmbedder{}, mv, ms, &fakeGrader{}, nsResolver(map[string][]string{"agent-a": {"agent-b"}}))
+	out, err := s.Recall(context.Background(), "agent-a", "q", Options{TopK: 8, IncludeWiki: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[ip-a]") || !strings.Contains(out, "[ip-b]") {
+		t.Fatalf("expected both namespaces' hits: %q", out)
+	}
+	if !strings.Contains(out, "[来源: agent-a]") || !strings.Contains(out, "[来源: agent-b]") {
+		t.Fatalf("expected source annotation for both agents: %q", out)
+	}
+}
+
+func TestRecallIsolatedNoAnnotation(t *testing.T) {
+	mv := &agentVec{byAgent: map[string][]vec.Hit{
+		"agent-a": {{ID: "ip-a", AgentID: "agent-a", Kind: "interest_point", Score: 0.9}},
+		"agent-b": {{ID: "ip-b", AgentID: "agent-b", Kind: "interest_point", Score: 0.9}},
+	}}
+	ms := &agentStore{}
+	ms.fs("agent-a").ips["ip-a"] = &store.InterestPoint{ID: "ip-a", AgentID: "agent-a", Name: "A"}
+	ms.fs("agent-b").ips["ip-b"] = &store.InterestPoint{ID: "ip-b", AgentID: "agent-b", Name: "B"}
+
+	// No resolver → isolated: only the agent's own namespace, no annotation.
+	s := New(fakeEmbedder{}, mv, ms, &fakeGrader{})
+	out, err := s.Recall(context.Background(), "agent-a", "q", Options{TopK: 8, IncludeWiki: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "[ip-b]") {
+		t.Fatalf("isolated recall leaked other namespace: %q", out)
+	}
+	if !strings.Contains(out, "[ip-a]") {
+		t.Fatalf("missing own hit: %q", out)
+	}
+	if strings.Contains(out, "来源:") {
+		t.Fatalf("isolated recall should not annotate source: %q", out)
+	}
+}
+
+func TestDedupeHitsAcrossNamespaces(t *testing.T) {
+	hits := []vec.Hit{
+		{ID: "x", AgentID: "agent-a", Score: 0.9},
+		{ID: "x", AgentID: "agent-b", Score: 0.8}, // same id, different agent → kept
+		{ID: "x", AgentID: "agent-a", Score: 0.7}, // duplicate (agent-a, x) → dropped
+		{ID: "y", AgentID: "agent-a", Score: 0.6},
+	}
+	got := dedupeHits(hits)
+	if len(got) != 3 {
+		t.Fatalf("dedupe result = %d hits, want 3", len(got))
+	}
+	if got[0].AgentID != "agent-a" || got[1].AgentID != "agent-b" {
+		t.Fatalf("unexpected dedupe order: %+v", got)
+	}
+}
+
+func TestSearchAcrossNamespacesSetsAgent(t *testing.T) {
+	mv := &agentVec{byAgent: map[string][]vec.Hit{
+		"agent-a": {{ID: "ip-a", AgentID: "agent-a", Kind: "interest_point", Score: 0.9}},
+		"agent-b": {{ID: "ip-b", AgentID: "agent-b", Kind: "interest_point", Score: 0.7}},
+	}}
+	ms := &agentStore{}
+	ms.fs("agent-a").ips["ip-a"] = &store.InterestPoint{ID: "ip-a", AgentID: "agent-a", Name: "A"}
+	ms.fs("agent-b").ips["ip-b"] = &store.InterestPoint{ID: "ip-b", AgentID: "agent-b", Name: "B"}
+
+	s := New(fakeEmbedder{}, mv, ms, &fakeGrader{}, nsResolver(map[string][]string{"agent-a": {"agent-b"}}))
+	res, err := s.Search(context.Background(), "agent-a", "q", 8, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("search results = %d, want 2", len(res))
+	}
+	agents := map[string]string{}
+	for _, r := range res {
+		agents[r.ID] = r.Agent
+	}
+	if agents["ip-a"] != "agent-a" || agents["ip-b"] != "agent-b" {
+		t.Fatalf("agent annotations = %v, want ip-a→agent-a, ip-b→agent-b", agents)
+	}
+}
+
+func TestGetByIDAcrossNamespacesOwnFirst(t *testing.T) {
+	mv := &agentVec{}
+	ms := &agentStore{}
+	// Both namespaces have the same id; the agent's own wins.
+	ms.fs("agent-a").ips["dup"] = &store.InterestPoint{ID: "dup", AgentID: "agent-a", Name: "Own"}
+	ms.fs("agent-b").ips["dup"] = &store.InterestPoint{ID: "dup", AgentID: "agent-b", Name: "Other"}
+
+	s := New(fakeEmbedder{}, mv, ms, &fakeGrader{}, nsResolver(map[string][]string{"agent-a": {"agent-b"}}))
+	r, err := s.GetByID(context.Background(), "agent-a", "dup", 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil || r.Title != "Own" {
+		t.Fatalf("GetByID = %+v, want own namespace hit first", r)
+	}
+	if r.Agent != "agent-a" {
+		t.Fatalf("agent = %q, want agent-a", r.Agent)
+	}
+
+	// Unknown in own but present in a visible namespace → resolved from there.
+	ms.fs("agent-b").ips["only-b"] = &store.InterestPoint{ID: "only-b", AgentID: "agent-b", Name: "FromB"}
+	r, err = s.GetByID(context.Background(), "agent-a", "only-b", 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil || r.Title != "FromB" || r.Agent != "agent-b" {
+		t.Fatalf("cross-namespace GetByID = %+v, want FromB from agent-b", r)
+	}
+}

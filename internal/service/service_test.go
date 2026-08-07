@@ -336,3 +336,64 @@ func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
 		t.Errorf("reconcile called for no-op run: %+v", fw.reconciles)
 	}
 }
+
+func TestBuildNamespaceResolverModes(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	mk := func(id, agent string) store.InterestPoint {
+		return store.InterestPoint{ID: id, AgentID: agent, Name: "n-" + id, Status: "active"}
+	}
+	if err := st.UpsertInterestPoint(ctx, mk("a1", "agent-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertInterestPoint(ctx, mk("b1", "agent-b")); err != nil {
+		t.Fatal(err)
+	}
+
+	// isolated (default) → nil resolver (each agent reads only itself).
+	cfg := config.Default()
+	if r := buildNamespaceResolver(cfg, st); r != nil {
+		t.Error("isolated mode should return a nil resolver")
+	}
+
+	// all → dynamically discovers every persisted namespace.
+	cfg.Namespaces.Mode = config.NamespaceAll
+	r := buildNamespaceResolver(cfg, st)
+	ns, err := r(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, n := range ns {
+		got[n] = true
+	}
+	if !got["agent-a"] || !got["agent-b"] {
+		t.Errorf("all-mode namespaces = %v, want both agent-a and agent-b", ns)
+	}
+
+	// custom → one-way visible_to map (no store discovery).
+	cfg = config.Default()
+	cfg.Namespaces.Mode = config.NamespaceCustom
+	cfg.Namespaces.VisibleTo = map[string][]string{"agent-a": {"agent-b"}}
+	r = buildNamespaceResolver(cfg, st)
+	ns, err = r(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ns) != 1 || ns[0] != "agent-b" {
+		t.Errorf("custom visible_to[agent-a] = %v, want [agent-b]", ns)
+	}
+	// Unconfigured agent → empty visible set (reads only itself via recall).
+	ns, err = r(ctx, "agent-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ns) != 0 {
+		t.Errorf("unconfigured agent visible_to = %v, want empty", ns)
+	}
+}

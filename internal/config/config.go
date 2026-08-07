@@ -11,16 +11,32 @@ import (
 // Config is the full runtime configuration for the interest-memory service.
 // Loaded from a YAML file with env-var overrides for secrets.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	LLM       LLMConfig       `yaml:"llm"`
-	Embedding EmbeddingConfig `yaml:"embedding"`
-	Fork      ForkConfig      `yaml:"fork"`
-	Verify    VerifyConfig    `yaml:"verify"`
-	Wiki      WikiConfig      `yaml:"wiki"`
-	Search    SearchConfig    `yaml:"search"`
-	Log       LogConfig       `yaml:"log"`
-	Recall    RecallConfig    `yaml:"recall"`
-	Worker    WorkerConfig    `yaml:"worker"`
+	Server     ServerConfig     `yaml:"server"`
+	LLM        LLMConfig        `yaml:"llm"`
+	Embedding  EmbeddingConfig  `yaml:"embedding"`
+	Fork       ForkConfig       `yaml:"fork"`
+	Verify     VerifyConfig     `yaml:"verify"`
+	Wiki       WikiConfig       `yaml:"wiki"`
+	Search     SearchConfig     `yaml:"search"`
+	Log        LogConfig        `yaml:"log"`
+	Recall     RecallConfig     `yaml:"recall"`
+	Worker     WorkerConfig     `yaml:"worker"`
+	Namespaces NamespacesConfig `yaml:"namespaces"`
+}
+
+// Namespace modes.
+const (
+	NamespaceIsolated = "isolated" // default: each agent reads only its own namespace
+	NamespaceAll      = "all"      // every agent reads across all namespaces
+	NamespaceCustom   = "custom"   // per-agent readable set from VisibleTo
+)
+
+// NamespacesConfig controls cross-namespace visibility on the read side
+// (recall / search / get). Writes are always isolated to the agent's own
+// namespace. Default is isolated — behaviour identical to no configuration.
+type NamespacesConfig struct {
+	Mode      string              `yaml:"mode"`       // isolated | all | custom
+	VisibleTo map[string][]string `yaml:"visible_to"` // custom only: agent → namespaces it may read (one-way)
 }
 
 // WorkerConfig controls the async transcript-processing worker.
@@ -164,6 +180,9 @@ func Default() Config {
 			IncludeWiki: true,
 			MinScore:    0.30,
 		},
+		Namespaces: NamespacesConfig{
+			Mode: NamespaceIsolated,
+		},
 	}
 }
 
@@ -182,7 +201,21 @@ func Load(path string) (Config, error) {
 	}
 	cfg.applyEnv()
 	cfg.normalize()
+	if err := cfg.validate(); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// validate checks cross-cutting invariants (namespace mode, log retention).
+func (c *Config) validate() error {
+	switch c.Namespaces.Mode {
+	case "", NamespaceIsolated, NamespaceAll, NamespaceCustom:
+		// ok
+	default:
+		return fmt.Errorf("config: namespaces.mode must be one of isolated|all|custom (got %q)", c.Namespaces.Mode)
+	}
+	return nil
 }
 
 func (c *Config) applyEnv() {

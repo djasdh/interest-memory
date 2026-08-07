@@ -72,7 +72,7 @@ func New(
 		verify:   verifier,
 		interest: interest.New(embedder, vi, st, cfg.Fork),
 		wiki:     wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage()),
-		recall:   recall.New(embedder, vi, st, verifier),
+		recall:   recall.New(embedder, vi, st, verifier, buildNamespaceResolver(cfg, st)),
 	}
 }
 
@@ -179,6 +179,29 @@ func (s *Service) persistContradictions(ctx context.Context, agentID string, pts
 		})
 	}
 	return nil
+}
+
+// buildNamespaceResolver translates the configured namespace sharing into a
+// recall resolver. isolated (default) → nil (each agent reads only its own
+// namespace); all → discover every persisted namespace dynamically; custom →
+// the per-agent visible_to map (one-way visibility). nil disables annotation.
+func buildNamespaceResolver(cfg config.Config, st store.Store) recall.NamespaceResolver {
+	switch cfg.Namespaces.Mode {
+	case config.NamespaceAll:
+		return func(ctx context.Context, agentID string) ([]string, error) {
+			ids, err := st.ListAgentIDs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return ids, nil
+		}
+	case config.NamespaceCustom:
+		return func(ctx context.Context, agentID string) ([]string, error) {
+			return cfg.Namespaces.VisibleTo[agentID], nil
+		}
+	default:
+		return nil
+	}
 }
 
 // ListLogs returns change logs for an agent, newest first, paginated.
