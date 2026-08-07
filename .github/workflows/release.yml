@@ -65,6 +65,21 @@ jobs:
           cp "$dir/sqlite3-binding.h" "$RUNNER_TEMP/sqlitehdr/sqlite3.h"
           echo "CGO_CFLAGS=-I$RUNNER_TEMP/sqlitehdr" >> "$GITHUB_ENV"
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            v="${{ github.event.inputs.tag }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            v="${GITHUB_REF_NAME}"
+          else
+            v=$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName -q .tagName || echo dev)
+          fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Build
         env:
           CGO_ENABLED: "1"
@@ -76,7 +91,7 @@ jobs:
       - name: Package (tar.gz)
         if: runner.os != 'Windows'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.ver.outputs.version }}"
           mkdir -p dist
           cp "interest-memory-server" dist/
           cp config.example.yaml dist/
@@ -88,7 +103,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.ver.outputs.version }}"
           mkdir -p dist
           cp "interest-memory-server.exe" dist/
           cp config.example.yaml dist/
@@ -135,8 +150,8 @@ jobs:
           tag="${{ steps.tag.outputs.tag }}"
           echo "target tag: ${tag}"
           if [ -n "${tag}" ]; then
-            if ! gh release view "${tag}" --json tagName -q .tagName >/dev/null 2>&1; then
-              gh release create "${tag}" --title "${tag}" --notes "Automated binary build."
+            if ! gh release view -R "${GITHUB_REPOSITORY}" "${tag}" --json tagName -q .tagName >/dev/null 2>&1; then
+              gh release create -R "${GITHUB_REPOSITORY}" "${tag}" --title "${tag}" --notes "Automated binary build."
             fi
           fi
         env:
@@ -154,11 +169,11 @@ jobs:
           # dedupe: first workflow run uploads artifacts; retries tolerate existing assets
           for f in artifacts/*; do
             name=$(basename "$f")
-            if gh release view "${tag}" --json assets -q ".assets[].name" | grep -qx "${name}"; then
+            if gh release view -R "${GITHUB_REPOSITORY}" "${tag}" --json assets -q ".assets[].name" | grep -qx "${name}"; then
               echo "skip existing: ${name}"
             else
               echo "uploading: ${name}"
-              gh release upload "${tag}" "$f" --clobber
+              gh release upload -R "${GITHUB_REPOSITORY}" "${tag}" "$f" --clobber
             fi
           done
         env:
