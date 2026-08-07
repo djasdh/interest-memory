@@ -157,6 +157,32 @@ export function extractTurns(
   return out
 }
 
+/**
+ * Build the injected recall turn: a UserMessage whose info is cloned from the
+ * last real user message (so `toModelMessagesEffect` keeps a well-formed
+ * UserMessage) and whose text parts carry the `<memory_context>` block.
+ */
+export function buildMemoryTurn(
+  baseInfo: Record<string, unknown> | undefined,
+  ctx: string,
+): { info: Record<string, unknown>; parts: Array<{ type: string; text: string }> } {
+  return {
+    info: { ...(baseInfo ?? {}), id: `memory-recall-${Date.now()}` },
+    parts: [{ type: "text", text: `<memory_context>\n${ctx}\n</memory_context>` }],
+  }
+}
+
+/**
+ * Snapshot a message list for session-end ingest. The transform hook splices
+ * the recall turn into the SAME array opencode passes us (`output.messages` is
+ * a reference to the session message list), so the ingest cache must be a copy
+ * taken BEFORE the splice — otherwise the injected turn would be ingested back
+ * into the memory store as a real user turn (recall-loop pollution).
+ */
+export function cacheSnapshot<T>(messages: T[]): T[] {
+  return messages.slice()
+}
+
 /** Extract the last user text from a message list (for the recall query). */
 export function lastUserText(
   messages: Array<{

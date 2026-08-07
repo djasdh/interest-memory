@@ -8,7 +8,17 @@
 import { test } from "node:test"
 import assert from "node:assert"
 import { createServer } from "node:http"
-import { memoryConfig, extractTurns, lastUserText, recall, ingest, memorySearch, memoryLogs } from "./memory-lib.ts"
+import {
+  memoryConfig,
+  extractTurns,
+  lastUserText,
+  recall,
+  ingest,
+  memorySearch,
+  memoryLogs,
+  buildMemoryTurn,
+  cacheSnapshot,
+} from "./memory-lib.ts"
 
 test("memoryConfig defaults", () => {
   const cfg = memoryConfig({})
@@ -193,4 +203,40 @@ test("memoryLogs failure isolated", async () => {
   const cfg = memoryConfig({ INTEREST_BASE_URL: "http://127.0.0.1:1" })
   const out = JSON.parse(await memoryLogs(cfg, {}))
   assert.ok(out.error)
+})
+
+test("buildMemoryTurn clones base info and wraps memory_context", () => {
+  const base = { id: "u1", role: "user", sessionID: "s1" }
+  const turn = buildMemoryTurn(base, "- Go [interest_point]")
+  assert.equal(turn.info.id.startsWith("memory-recall-"), true)
+  assert.equal(turn.info.role, "user")
+  assert.equal(turn.info.sessionID, "s1")
+  assert.equal(turn.parts.length, 1)
+  assert.equal(turn.parts[0].type, "text")
+  assert.equal(turn.parts[0].text, "<memory_context>\n- Go [interest_point]\n</memory_context>")
+})
+
+test("buildMemoryTurn tolerates missing base info", () => {
+  const turn = buildMemoryTurn(undefined, "ctx")
+  assert.equal(turn.info.id.startsWith("memory-recall-"), true)
+  assert.equal(turn.info.role, undefined)
+})
+
+test("cacheSnapshot is a copy unaffected by later splice", () => {
+  const messages = [
+    { info: { role: "user" }, parts: [{ type: "text", text: "u1" }] },
+    { info: { role: "assistant" }, parts: [{ type: "text", text: "a1" }] },
+  ]
+  const snapshot = cacheSnapshot(messages)
+  // Simulate the transform hook splicing the recall turn in-place.
+  messages.splice(messages.length - 1, 0, {
+    info: { role: "user", id: "memory-recall-123" },
+    parts: [{ type: "text", text: "<memory_context>\nctx\n</memory_context>" }],
+  })
+  assert.equal(messages.length, 3)
+  assert.equal(snapshot.length, 2)
+  assert.equal(snapshot[0].parts[0].text, "u1")
+  assert.equal(snapshot[1].parts[0].text, "a1")
+  // The snapshot must not contain the injected turn (would pollute ingest).
+  assert.equal(snapshot.some((m) => m.info?.id?.startsWith("memory-recall-")), false)
 })

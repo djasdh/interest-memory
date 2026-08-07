@@ -21,6 +21,8 @@
 
 import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import {
+  buildMemoryTurn,
+  cacheSnapshot,
   extractTurns,
   ingest,
   lastUserText,
@@ -84,7 +86,10 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
       if (!messages.length) return
       const last = messages[messages.length - 1]
       const sessionID = last?.info?.sessionID
-      if (sessionID) lastTransformMessages.set(sessionID, messages)
+      // Snapshot BEFORE splicing: output.messages is the SAME array opencode
+      // passes to toModelMessagesEffect, so the ingest cache must not include
+      // the injected recall turn (else it'd be ingested back as a user turn).
+      if (sessionID) lastTransformMessages.set(sessionID, cacheSnapshot(messages))
       const lastUser = lastUserText(messages)
       if (!lastUser) return
       if (!sessionID) return
@@ -98,19 +103,15 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
       // Clone the last real user message's info and swap in recall context so
       // the injected turn stays a well-formed UserMessage (toModelMessagesEffect
       // reads info.id/role and text parts). Insert right before the final
-      // message so the model sees it as the incoming user turn.
+      // message so the model sees it as the incoming user turn. NOTE: must
+      // mutate in place (push/splice) — the trigger contract is "mutate output
+      // in place", and replacing output.messages is dropped by the caller.
       const baseInfo = messages
         .slice()
         .reverse()
         .find((m) => m.info?.role === "user")?.info
-      output.messages = [
-        ...messages.slice(0, -1),
-        {
-          info: { ...baseInfo, id: `memory-recall-${Date.now()}` },
-          parts: [{ type: "text", text: `<memory_context>\n${ctx}\n</memory_context>` }],
-        },
-        messages[messages.length - 1],
-      ] as never
+      const injected = buildMemoryTurn(baseInfo, ctx)
+      output.messages.splice(messages.length - 1, 0, injected as never)
     },
 
     // Push the transcript when the session goes idle or is deleted.
