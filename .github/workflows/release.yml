@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to attach artifacts to (default: latest release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            ext: ""
+          - target: darwin-amd64
+            runner: macos-13
+            goos: darwin
+            goarch: amd64
+            ext: ""
+          - target: darwin-arm64
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+            ext: ""
+          - target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install cgo deps (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsqlite3-dev
+
+      - name: Install mingw gcc (windows)
+        if: runner.os == 'Windows'
+        run: choco install mingw --no-progress -y
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -trimpath -ldflags "-s -w" -o "interest-memory-server${{ matrix.ext }}" ./cmd/server
+
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp "interest-memory-server" dist/
+          cp config.example.yaml dist/
+          cp LICENSE dist/
+          cd dist
+          tar czf "../interest-memory-server_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" interest-memory-server config.example.yaml LICENSE
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp "interest-memory-server.exe" dist/
+          cp config.example.yaml dist/
+          cp LICENSE dist/
+          cd dist
+          powershell Compress-Archive -Path "*" -DestinationPath "../interest-memory-server_${VERSION}_windows_amd64.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: interest-memory-server_*${{ matrix.goos }}_${{ matrix.goarch }}.*
+
+  release:
+    name: Attach to release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve target tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}"
+          elif [ -n "${GITHUB_REF_NAME}" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}"
+          else
+            latest=$(gh release view --json tagName -q .tagName 2>/dev/null || echo "")
+            echo "tag=${latest}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Ensure release exists
+        shell: bash
+        run: |
+          set -e
+          tag="${{ steps.tag.outputs.tag }}"
+          echo "target tag: ${tag}"
+          if [ -n "${tag}" ]; then
+            if ! gh release view "${tag}" --json tagName -q .tagName >/dev/null 2>&1; then
+              gh release create "${tag}" --title "${tag}" --notes "Automated binary build."
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload assets
+        shell: bash
+        run: |
+          set -e
+          tag="${{ steps.tag.outputs.tag }}"
+          if [ -z "${tag}" ]; then
+            echo "no target tag, skipping upload"
+            exit 0
+          fi
+          # dedupe: first workflow run uploads artifacts; retries tolerate existing assets
+          for f in artifacts/*; do
+            name=$(basename "$f")
+            if gh release view "${tag}" --json assets -q ".assets[].name" | grep -qx "${name}"; then
+              echo "skip existing: ${name}"
+            else
+              echo "uploading: ${name}"
+              gh release upload "${tag}" "$f" --clobber
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
