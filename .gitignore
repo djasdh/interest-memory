@@ -22,6 +22,7 @@ config.local.yaml
 兴趣点记忆系统设计方案.md
 函数级调用图.md
 docs/superpowers/plans/
+docs/contradiction-quality-plan.md
 
 # local build artifacts
 bin/
