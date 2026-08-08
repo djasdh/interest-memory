@@ -8,16 +8,9 @@
 
 Agents forget everything between sessions. Not the model's fault — they lack a real memory layer. interest-memory is a standalone memory backend: at the end of a session it extracts interest points from the transcript, verifies and cleans them, and writes them into a local knowledge base; at the start of the next session it recalls and injects relevant context. The entire footprint: **one 18MB binary + one SQLite file**.
 
-## Why
+**Light** — one ~18MB binary + one SQLite file is the whole footprint; ~17MB idle, <75MB peak (measured), runs on a Raspberry Pi
 
-| | interest-memory | mem0 | Zep | Letta |
-|---|---|---|---|---|
-| Deploy | **single binary + SQLite** | Python + vector DB | Postgres stack | Postgres + per-agent processes |
-| Idle RAM | **~17 MB** (measured) | hundreds of MB | hundreds of MB–1G+ | hundreds of MB+ |
-| External deps | **none** (LLM via API) | vector DB required | Redis + Postgres | Postgres |
-| Runs on | a Raspberry Pi | a real server | a real server | a real server |
-
-Other memory systems need a server. This one needs a process.
+**Simple** — one binary + one config file is a complete service; one-command `curl` install, no external DB, no cloud dependency (LLM/embedding can point at local Ollama/vLLM for fully offline use)
 
 **What it does**
 
@@ -48,11 +41,13 @@ curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts
 
 ## Highlights
 
-- **Light** — ~17 MB idle, <75 MB peak (measured); all data in one local SQLite file
-- **Self-hosted** — one binary + one config; no cloud dependency, fully localizable
-- **Trustworthy** — 3-stage verification (check → relation verdict → evidence), subjectivity exemption, contradiction loop
-- **Controllable** — full `change_log` audit; per-agent namespaces (isolated/shared); progressive disclosure keeps context clean
-- **Integrates** — Hermes plugin out of the box; any other agent via REST API
+| Highlight | Detail |
+|---|---|
+| Light | ~17 MB idle, <75 MB peak (measured); all data in one local SQLite file |
+| Self-hosted | one binary + one config; no cloud dependency, fully localizable |
+| Trustworthy | 3-stage verification (check → relation verdict → evidence), subjectivity exemption, contradiction loop |
+| Controllable | full `change_log` audit; per-agent namespaces (isolated/shared); progressive disclosure keeps context clean |
+| Integrates | Hermes plugin out of the box; any other agent via REST API |
 
 ## Resource usage (measured)
 
