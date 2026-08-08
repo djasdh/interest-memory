@@ -130,30 +130,39 @@ cp bridge/opencode/memory-lib.ts ~/.config/opencode/plugin/memory-lib.ts
 - Transcript push on `session.status` idle (debounced 2s) and `session.deleted`.
 - Tools: `memory_search`, `memory_logs` (registered via `tool` hooks).
 
-**API 稳定性说明（2026-08 审计）**
+**API stability note (2026-08 audit)**
 
-`experimental.chat.messages.transform` 是当前**唯一**能做每轮动态 recall
-注入的 opencode 接口，但需要注意它的官方地位：
+`experimental.chat.messages.transform` is currently the **only** opencode
+interface that can do per-turn dynamic recall injection, but be aware of its
+official status:
 
-- **未列入官方文档**。opencode 文档（`/docs/plugins/` 事件列表、
-  `/docs/rules/`、`/docs/config/`）承诺的注入机制只有静态指令文件
-  （`AGENTS.md` / `CLAUDE.md` / `config.instructions`），以及压缩时触发的
-  `experimental.session.compacting`；没有运行时动态消息注入接口。
-- **存在于官方类型定义**（`@opencode-ai/plugin` 的 `Hooks` 类型），
-  源码在 `session/prompt.ts:1255` 触发，`experimental.` 前缀即不稳定信号。
-- **替代项对比**：
-  - `experimental.chat.system.transform` — 生效但注入 system prompt 会破坏
-    前缀缓存（system 在请求最前，动态内容导致整段重算），且同样未文档化。
-  - `chat.message` — 无 `experimental` 前缀，但触发于消息**保存前**，
-    splice 注入会持久化进历史 → 污染 ingest，不能用于 recall。
-  - 静态 `instructions`/`AGENTS.md` — 官方承诺但无法随对话动态变化。
-- **平台无官方记忆后端**：opencode 无内置 memory/knowledge 接口（相关
-  `/docs/memory|knowledge|context` 均 404），长期记忆靠社区插件
-  （如 opencode-mem）或本项目这类自建桥接。
-- **结论**：保持当前 `messages.transform` + 原地 splice 写法。它虽未文档化，
-  但是唯一满足"每轮动态注入 + 不污染历史 + 前缀缓存友好"三条件的接口。
-  升级 opencode 后如该 hook 变更/移除，recall 注入会静默失效（失败隔离
-  已保证不阻断会话），届时按发行说明迁移。
+- **Not in the official docs.** The opencode docs (`/docs/plugins/` event
+  list, `/docs/rules/`, `/docs/config/`) only promise static instruction files
+  (`AGENTS.md` / `CLAUDE.md` / `config.instructions`) and the compression-time
+  `experimental.session.compacting`; there is no runtime dynamic message
+  injection interface.
+- **Present in the official type definitions** (the `Hooks` type in
+  `@opencode-ai/plugin`); the source triggers it at `session/prompt.ts:1255`,
+  and the `experimental.` prefix signals instability.
+- **Alternative comparison:**
+  - `experimental.chat.system.transform` — works, but injecting into the
+    system prompt breaks prefix caching (system is first in the request;
+    dynamic content forces a full recompute), and it is equally undocumented.
+  - `chat.message` — no `experimental` prefix, but it fires **before** the
+    message is saved; a splice injection would be persisted into history →
+    pollutes ingest, so it cannot be used for recall.
+  - Static `instructions` / `AGENTS.md` — officially supported but cannot
+    change dynamically with the conversation.
+- **The platform has no official memory backend**: opencode has no built-in
+  memory/knowledge interface (relevant `/docs/memory|knowledge|context` all
+  404); long-term memory relies on community plugins (e.g. opencode-mem) or
+  self-built bridges like this one.
+- **Conclusion**: keep the current `messages.transform` + in-place splice
+  approach. It is undocumented, but it is the only interface satisfying all
+  three constraints — "per-turn dynamic injection + no history pollution +
+  prefix-cache friendly". If an opencode upgrade changes or removes this hook,
+  recall injection will silently no-op (failure isolation guarantees sessions
+  are never blocked); migrate per the release notes at that point.
 
 ## openclaw
 
