@@ -1,123 +1,121 @@
-[English](README.en.md) | 中文
+English | [中文](README.zh.md)
 
 ![interest-memory](assets/banner.png)
 
-# interest-memory — Agent 的长期记忆库
+# interest-memory — Long-term memory for AI agents
 
-**一个 50MB 的进程，替代 Postgres + Redis + 向量库的一整套记忆后端。**
+**One ~50MB process instead of a Postgres + Redis + vector DB stack.**
 
-你的 agent 记不住事？每次会话都要重新介绍自己？这不是模型的错——是缺一个真正的记忆层。interest-memory 是一个独立的记忆服务：会话结束后从对话里提取兴趣点，核查、清洗、写入本地知识库；下次会话开始自动召回注入上下文。全部家当：**一个 18MB 二进制 + 一个 SQLite 文件**。
+Agents forget everything between sessions. Not the model's fault — they lack a real memory layer. interest-memory is a standalone memory backend: at the end of a session it extracts interest points from the transcript, verifies and cleans them, and writes them into a local knowledge base; at the start of the next session it recalls and injects relevant context. The entire footprint: **one 18MB binary + one SQLite file**.
 
-| 卖点 | 说明 |
+| Selling point | Detail |
 |---|---|
-| **轻** | 单个 ~18MB 二进制 + 一个 SQLite 文件就是全部；空载 ~17MB、峰值 <75MB（实测），树莓派都能跑 |
-| **简单** | 一个二进制 + 一个配置文件即完整服务；`curl` 一键装，无外部数据库、无云依赖（LLM/embedding 可指向本地 Ollama/vLLM，完全离线） |
-| **会话末提取** | 自动提取兴趣点 → 核查 → 写入本地知识库 |
-| **会话初召回** | 自动召回相关记忆 → 注入上下文（只给精简条目，完整内容按需查，最小化上下文污染） |
-| **多 agent 共享** | 一个服务接多个 agent（Hermes / OpenCode / Claude Code / Codex 等），记忆可隔离、全共享、或按需互通 |
-| **全审计** | 每次结构化改动写入 `change_log`，可追溯回放 |
-| **带证据** | 每条记忆都带证据（网页 / 会话轮次 / 检索 query）；主观偏好不当作事实；矛盾闭环处理 |
+| **Light** | one ~18MB binary + one SQLite file is the whole footprint; ~17MB idle, <75MB peak (measured), runs on a Raspberry Pi |
+| **Simple** | one binary + one config file is a complete service; one-command `curl` install, no external DB, no cloud dependency (LLM/embedding can point at local Ollama/vLLM for fully offline use) |
+| **Extract at session end** | automatically extracts interest points → verifies → writes to the local knowledge base |
+| **Recall at session start** | recalls relevant memories → injects into context (concise entries only, full content on demand, minimal context pollution) |
+| **Multi-agent shared** | one service for many agents (Hermes / OpenCode / Claude Code / Codex etc.), with isolated, fully-shared, or selective sharing |
+| **Full audit** | every structural change is written to `change_log`, replayable |
+| **Evidence-backed** | every entry carries evidence (web URL / turn / query); subjective preferences are never stored as facts; contradictions are closed in a loop |
 
-## 快速开始
+## Quick start
 
-**一键安装（curl）**
+**One-command install (curl)**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts/install.sh | bash
 ```
 
-自动拉取源码 → 检查/安装依赖 → 引导配置 → 可选 systemd 自启。
+Auto-fetches the source → checks/installs dependencies → guides setup → optional systemd.
 
-**配置 LLM（让 agent 自己拉取安装）**
+**Configure the LLM (let your agent fetch and run it)**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts/install_llm.py | python3 - --provider <provider>
-# --help 查看全部 provider；交给 agent：它读 --help（即操作指令）自动完成配置
+# --help lists all providers; hand to your agent: it reads --help (its operating instructions) and configures itself
 ```
 
-**预编译二进制（可选）**：[Release v0.1.0](https://github.com/djasdh/interest-memory/releases)（linux / mac / windows）
+**Pre-built binary (optional)**: [Release v0.1.0](https://github.com/djasdh/interest-memory/releases) (linux / mac / windows)
 
-## 资源占用（实测）
+## Resource usage (measured)
 
-在单测工作流上实测（Go 1.26 + cgo，`scripts/e2e.sh` 全链路）：
-
-| 指标 | 数值 |
+| Metric | Value |
 |---|---|
-| 二进制大小 | ~18 MB（cgo 静态链接 sqlite-vec） |
-| 空载内存 | **~17 MB RSS**（实测） |
-| 流水线峰值内存 | <75 MB RSS |
-| 初始占用 | ~20 MB（二进制 + 空库） |
-| 持续使用增长 | 实测约 1 周涨至 ~38 MB，主体为会话原文转录（~71%）；其余为向量索引 + 兴趣点/wiki 页 |
+| Binary size | ~18 MB (cgo static sqlite-vec) |
+| Idle memory | **~17 MB RSS** (measured) |
+| Pipeline peak | <75 MB RSS |
+| Initial footprint | ~20 MB (binary + empty DB) |
+| Growth | ~38 MB after a week of use; mostly raw session transcripts (~71%) |
 
-`session_transcripts` 保留全文原文，想控磁盘增长可在外部定期清理；`fork.max_concurrency` / `verify.max_concurrency` 可压低峰值内存。
+`session_transcripts` keeps full raw text — trim externally to bound disk growth; `fork.max_concurrency` / `verify.max_concurrency` cap peak memory.
 
-## 接入
+## Integration
 
-现已接入多个 agent 框架，共用一套 env（`INTEREST_BASE_URL` / `INTEREST_AGENT` / `INTEREST_TIMEOUT`），服务挂了不阻塞会话：
+Multiple agent frameworks are supported out of the box, sharing one env set (`INTEREST_BASE_URL` / `INTEREST_AGENT` / `INTEREST_TIMEOUT`); a down service never blocks a session:
 
-| Agent | 接入形态 |
+| Agent | Form |
 |---|---|
-| Hermes | MemoryProvider 插件（`$HERMES_HOME/plugins/interest/`） |
-| opencode | 本地插件（`~/.config/opencode/plugin/memory.ts`） |
-| openclaw | 原生插件（`<configDir>/extensions/interest-memory/`） |
-| pi | TS 扩展（`~/.pi/agent/extensions/interest-memory/`） |
-| Claude Code | 官方插件 + MCP（`claude --plugin-dir bridge/claudecode`） |
-| Codex | 官方插件 / hooks + MCP（`~/.codex/hooks.json`） |
-| Reasonix | 官方插件 + MCP（`reasonix plugin install bridge/reasonix --link`） |
+| Hermes | MemoryProvider plugin (`$HERMES_HOME/plugins/interest/`) |
+| opencode | local plugin (`~/.config/opencode/plugin/memory.ts`) |
+| openclaw | native plugin (`<configDir>/extensions/interest-memory/`) |
+| pi | TS extension (`~/.pi/agent/extensions/interest-memory/`) |
+| Claude Code | official plugin + MCP (`claude --plugin-dir bridge/claudecode`) |
+| Codex | official plugin / hooks + MCP (`~/.codex/hooks.json`) |
+| Reasonix | official plugin + MCP (`reasonix plugin install bridge/reasonix --link`) |
 
-所有桥接能力一致：会话开始召回注入、会话结束推转录、消费端 `memory_search` / `memory_logs` 工具。详见 `bridge/README.md`。
+Every bridge offers the same capabilities: session-start recall injection, session-end transcript push, and `memory_search` / `memory_logs` consumer tools. See `bridge/README.md`.
 
-## 架构
+## Architecture
 
 ```
-internal/store/      SQLite（兴趣点/wiki 页/边/claims/转录/change_log）
-internal/vec/        sqlite-vec 向量索引（FTS 兜底）
-internal/llm/        OpenAI 兼容 Chat/Embedding
-internal/fork/       前缀窗口切分 + 并行候选提取
-internal/verify/     三段式纠错（核查/claims/矛盾）
-internal/wiki/       写入 agent loop + 相关页协同
-internal/recall/     召回注入 + 结构化查询
-bridge/hermes/       Hermes MemoryProvider 插件
+internal/store/      SQLite (interest points/wiki pages/edges/claims/transcripts/change_log)
+internal/vec/        sqlite-vec vector index (FTS fallback)
+internal/llm/        OpenAI-compatible Chat/Embedding
+internal/fork/       sliding-window split + parallel candidate extraction
+internal/verify/     3-stage verification (check/claims/contradictions)
+internal/wiki/       per-point agent-loop writer + related-page reconciliation
+internal/recall/     recall injection + structured queries
+bridge/hermes/       Hermes MemoryProvider plugin
 ```
 
-## 文档
+## Docs
 
-- **REST API** — `POST /api/v1/{agent}/sessions`、`GET /api/v1/{agent}/recall`、`search` / `logs` / `stats` / `jobs` 等（见下方 API 表）
-- **配置** — `config.example.yaml` 全字段注释（llm / embedding / fork / verify / wiki / recall / namespaces）
-- **开发** — `CGO_ENABLED=1 go test -race ./...`；插件测试 `node --test bridge/...`；端到端 `bash scripts/e2e.sh`
+- **REST API** — `POST /api/v1/{agent}/sessions`, `GET /api/v1/{agent}/recall`, `search` / `logs` / `stats` / `jobs` (table below)
+- **Config** — fully commented `config.example.yaml` (llm / embedding / fork / verify / wiki / recall / namespaces)
+- **Development** — `CGO_ENABLED=1 go test -race ./...`; plugin tests `node --test bridge/...`; e2e `bash scripts/e2e.sh`
 
-### API 速查
+### API quick reference
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/{agent}/sessions` | 会话末推转录 → 202 job_id |
-| GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | 召回注入（时间过滤可选） |
-| GET | `/api/v1/{agent}/search?query= 或 ?id=&top_k=` | 消费侧查询：完整内容 + 边关系 |
-| GET | `/api/v1/{agent}/logs?limit=&offset=` | 变更日志（倒序分页） |
-| GET | `/api/v1/{agent}/interest-points` | 兴趣点列表 |
-| GET | `/api/v1/{agent}/wiki/pages[?type=]` | wiki 页列表 |
-| POST | `/api/v1/{agent}/fork` | 手动触发分叉 |
-| GET | `/api/v1/{agent}/jobs/{id}` | 任务状态 |
-| GET | `/api/v1/{agent}/stats` | 统计 |
-| GET | `/api/health` | 健康检查 |
+| POST | `/api/v1/{agent}/sessions` | session-end transcript push → 202 job_id |
+| GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | recall injection (optional time filters) |
+| GET | `/api/v1/{agent}/search?query= or ?id=&top_k=` | consumer query: full content + edges |
+| GET | `/api/v1/{agent}/logs?limit=&offset=` | change log (desc, paged) |
+| GET | `/api/v1/{agent}/interest-points` | list interest points |
+| GET | `/api/v1/{agent}/wiki/pages[?type=]` | list wiki pages |
+| POST | `/api/v1/{agent}/fork` | manually trigger forking |
+| GET | `/api/v1/{agent}/jobs/{id}` | job status |
+| GET | `/api/v1/{agent}/stats` | stats |
+| GET | `/api/health` | health check |
 
-### 命名空间
+### Namespaces
 
-每个 agent（`{agent}` 路径段 / `INTEREST_AGENT`）拥有独立命名空间，通过 `namespaces` 配置互通：
+Each agent (`{agent}` path segment / `INTEREST_AGENT`) has an isolated namespace; cross-namespace reads are configured via `namespaces`:
 
 ```yaml
 namespaces:
-  mode: isolated   # isolated（默认）| all（全部互通）| custom（指定互通）
-  visible_to:      # 仅 custom：单向可见声明
+  mode: isolated   # isolated (default) | all | custom
+  visible_to:      # custom only: one-way visibility declarations
     codex: [opencode, pi]
 ```
 
-互通时结果标注来源（`recall` 行尾 `[from: <agent>]`，`search` 的 `result.agent` 字段）。
+Shared results are annotated with origin (`[from: <agent>]` on recall lines, `result.agent` in search/get).
 
-## 依赖
+## Dependencies
 
-`my-agent-core`、mattn/go-sqlite3（cgo 静态链接）、sqlite-vec、goldmark-obsidian（双链解析）。全部 MIT 兼容。
+`my-agent-core`, mattn/go-sqlite3 (cgo static), sqlite-vec, goldmark-obsidian (wikilinks). All MIT-compatible.
 
 ## License
 
-[MIT](LICENSE) — 贡献不分人写还是 AI 写，质量好就欢迎。
+[MIT](LICENSE) — Contributions are welcome whether written by a human or an AI — quality is what counts.
