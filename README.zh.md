@@ -6,7 +6,7 @@
 
 **一个 50MB 的进程，替代 Postgres + Redis + 向量库的一整套记忆后端。**
 
-你的 agent 记不住事？每次会话都要重新介绍自己？这不是模型的错——是缺一个真正的记忆层。interest-memory 是一个独立的记忆服务：会话结束后从对话里提取兴趣点，核查、清洗、写入本地知识库；下次会话开始自动召回注入上下文。全部家当：**一个 18MB 二进制 + 一个 SQLite 文件**。
+你的 agent 记不住事？每次会话都要重新介绍自己？这不是模型的错——是缺一个真正的记忆层。interest-memory 是一个独立的记忆服务：会话结束后从对话里提取兴趣点，核查、清洗、写入本地知识库；下次会话开始自动召回注入上下文。全部家当：**一个 18MB 二进制 + 一个 SQLite 文件**。记忆的单位是**兴趣点**：语义相近的自动合并，每个兴趣点由模型驱动的 agent loop 写成 wiki 页——知识库越用越收敛、不膨胀。
 
 | 卖点 | 说明 |
 |---|---|
@@ -16,6 +16,10 @@
 | **会话初召回** | 自动召回相关记忆 → 注入上下文（只给精简条目，完整内容按需查，最小化上下文污染） |
 | **多 agent 共享** | 一个服务接多个 agent（Hermes / OpenCode / Claude Code / Codex 等），记忆可隔离、全共享、或按需互通 |
 | **全审计** | 每次结构化改动写入 `change_log`，可追溯回放 |
+| **兴趣点收敛** | 语义相近的兴趣点自动合并/关联，而不是无脑堆条——记忆越用越收敛，不膨胀 |
+| **归档演进** | 过期记忆标记 superseded/archived（不删除），带 replacement 链指向继任者；`GetByID` 可确认"什么取代了它"——旧知识不丢也不误导 |
+| **语义边** | LLM 写入 wiki 时判定 5 类边：`related` / `contradicts` / `sequel` / `references` / `has_page`；结构变更 3 跳内级联传播（归档级联、后继替换、矛盾闭环、内容同步） |
+| **由点到面** | 检索命中是记忆图的入口而非孤立片段：每条结果带出边/入边（id/title/kind/weight），`search?id=` 跳到节点再展开——从单点沿图走到邻域、再到整张网络，不再是单次 RAG 取片段 |
 | **带证据** | 每条记忆都带证据（网页 / 会话轮次 / 检索 query）；主观偏好不当作事实；矛盾闭环处理 |
 
 ## 快速开始
@@ -92,7 +96,7 @@ bridge/hermes/       Hermes MemoryProvider 插件
 |---|---|---|
 | POST | `/api/v1/{agent}/sessions` | 会话末推转录 → 202 job_id |
 | GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | 召回注入（时间过滤可选） |
-| GET | `/api/v1/{agent}/search?query= 或 ?id=&top_k=` | 消费侧查询：完整内容 + 边关系 |
+| GET | `/api/v1/{agent}/search?query= 或 ?id=&top_k=` | 消费侧查询：完整内容 + 出边/入边；`?id=` 跳到节点，支持沿图遍历 |
 | GET | `/api/v1/{agent}/logs?limit=&offset=` | 变更日志（倒序分页） |
 | GET | `/api/v1/{agent}/interest-points` | 兴趣点列表 |
 | GET | `/api/v1/{agent}/wiki/pages[?type=]` | wiki 页列表 |

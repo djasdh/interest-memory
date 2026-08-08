@@ -6,7 +6,7 @@ English | [中文](README.zh.md)
 
 **One ~50MB process instead of a Postgres + Redis + vector DB stack.**
 
-Agents forget everything between sessions. Not the model's fault — they lack a real memory layer. interest-memory is a standalone memory backend: at the end of a session it extracts interest points from the transcript, verifies and cleans them, and writes them into a local knowledge base; at the start of the next session it recalls and injects relevant context. The entire footprint: **one 18MB binary + one SQLite file**.
+Agents forget everything between sessions. Not the model's fault — they lack a real memory layer. interest-memory is a standalone memory backend: at the end of a session it extracts interest points from the transcript, verifies and cleans them, and writes them into a local knowledge base; at the start of the next session it recalls and injects relevant context. The entire footprint: **one 18MB binary + one SQLite file**. The unit of memory is the **interest point**: semantically similar ones are merged automatically, and each one is written into the knowledge base as a wiki page by an LLM-driven agent loop — the knowledge base converges with use instead of bloating.
 
 | Selling point | Detail |
 |---|---|
@@ -16,6 +16,10 @@ Agents forget everything between sessions. Not the model's fault — they lack a
 | **Recall at session start** | recalls relevant memories → injects into context (concise entries only, full content on demand, minimal context pollution) |
 | **Multi-agent shared** | one service for many agents (Hermes / OpenCode / Claude Code / Codex etc.), with isolated, fully-shared, or selective sharing |
 | **Full audit** | every structural change is written to `change_log`, replayable |
+| **Interest-point convergence** | semantically similar interest points are auto-merged or related instead of stacked — memory converges with use instead of bloating |
+| **Archive & evolve** | stale entries are marked superseded/archived (not deleted) with a replacement chain to the successor; `GetByID` reveals what superseded what — old knowledge is preserved without misleading |
+| **Semantic edges** | the LLM classifies 5 edge kinds while writing wiki pages: `related` / `contradicts` / `sequel` / `references` / `has_page`; structural changes propagate within 3 hops (cascade archive, replacement substitution, contradiction closure, content sync) |
+| **Graph walk** | hits are entry points into a memory graph, not isolated chunks: every result carries outlinks + backlinks (id/title/kind/weight), and `search?id=` jumps to a node and expands again — traverse point → neighborhood → network, beyond one-shot RAG |
 | **Evidence-backed** | every entry carries evidence (web URL / turn / query); subjective preferences are never stored as facts; contradictions are closed in a loop |
 
 ## Quick start
@@ -90,7 +94,7 @@ bridge/hermes/       Hermes MemoryProvider plugin
 |---|---|---|
 | POST | `/api/v1/{agent}/sessions` | session-end transcript push → 202 job_id |
 | GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | recall injection (optional time filters) |
-| GET | `/api/v1/{agent}/search?query= or ?id=&top_k=` | consumer query: full content + edges |
+| GET | `/api/v1/{agent}/search?query= or ?id=&top_k=` | consumer query: full content + outlinks/backlinks; `?id=` jumps to a node for graph walk |
 | GET | `/api/v1/{agent}/logs?limit=&offset=` | change log (desc, paged) |
 | GET | `/api/v1/{agent}/interest-points` | list interest points |
 | GET | `/api/v1/{agent}/wiki/pages[?type=]` | list wiki pages |
