@@ -8,17 +8,15 @@
 
 Agents forget everything between sessions. Not the model's fault — they lack a real memory layer. interest-memory is a standalone memory backend: at the end of a session it extracts interest points from the transcript, verifies and cleans them, and writes them into a local knowledge base; at the start of the next session it recalls and injects relevant context. The entire footprint: **one 18MB binary + one SQLite file**.
 
-**Light** — one ~18MB binary + one SQLite file is the whole footprint; ~17MB idle, <75MB peak (measured), runs on a Raspberry Pi
-
-**Simple** — one binary + one config file is a complete service; one-command `curl` install, no external DB, no cloud dependency (LLM/embedding can point at local Ollama/vLLM for fully offline use)
-
-**What it does**
-
-- Session end: automatically extracts interest points → verifies → writes to the local knowledge base
-- Session start: recalls relevant memories → injects into context (concise entries only, full content on demand, minimal context pollution)
-- Multi-agent shared memory: one service for many agents (Hermes / OpenCode / Claude Code / Codex etc.), with isolated, fully-shared, or selective sharing
-- Full audit: every structural change is written to `change_log`, replayable
-- Every entry carries evidence (web URL / turn / query); subjective preferences are never stored as facts; contradictions are closed in a loop
+| Selling point | Detail |
+|---|---|
+| **Light** | one ~18MB binary + one SQLite file is the whole footprint; ~17MB idle, <75MB peak (measured), runs on a Raspberry Pi |
+| **Simple** | one binary + one config file is a complete service; one-command `curl` install, no external DB, no cloud dependency (LLM/embedding can point at local Ollama/vLLM for fully offline use) |
+| **Extract at session end** | automatically extracts interest points → verifies → writes to the local knowledge base |
+| **Recall at session start** | recalls relevant memories → injects into context (concise entries only, full content on demand, minimal context pollution) |
+| **Multi-agent shared** | one service for many agents (Hermes / OpenCode / Claude Code / Codex etc.), with isolated, fully-shared, or selective sharing |
+| **Full audit** | every structural change is written to `change_log`, replayable |
+| **Evidence-backed** | every entry carries evidence (web URL / turn / query); subjective preferences are never stored as facts; contradictions are closed in a loop |
 
 ## Quick start
 
@@ -37,17 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/djasdh/interest-memory/main/scripts
 # --help lists all providers; hand to your agent: it reads --help (its operating instructions) and configures itself
 ```
 
-**Prebuilt binaries (optional)**: [Release v0.1.0](https://github.com/djasdh/interest-memory/releases) (linux / mac / windows)
-
-## Highlights
-
-| Highlight | Detail |
-|---|---|
-| Light | ~17 MB idle, <75 MB peak (measured); all data in one local SQLite file |
-| Self-hosted | one binary + one config; no cloud dependency, fully localizable |
-| Trustworthy | 3-stage verification (check → relation verdict → evidence), subjectivity exemption, contradiction loop |
-| Controllable | full `change_log` audit; per-agent namespaces (isolated/shared); progressive disclosure keeps context clean |
-| Integrates | Hermes plugin out of the box; any other agent via REST API |
+**Pre-built binary (optional)**: [Release v0.1.0](https://github.com/djasdh/interest-memory/releases) (linux / mac / windows)
 
 ## Resource usage (measured)
 
