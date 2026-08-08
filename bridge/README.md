@@ -1,7 +1,7 @@
 # interest-memory — agent bridges
 
 Bridge plugins connecting AI coding agents to the local interest-memory REST
-service (design §五/§八). Each bridge implements three capabilities, mirroring
+service (design §5/§8). Each bridge implements three capabilities, mirroring
 the original Hermes `MemoryProvider` (`bridge/hermes/`):
 
 1. **Session-start recall** — `GET /api/v1/{agent}/recall?query=<last user text>`
