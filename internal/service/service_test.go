@@ -272,9 +272,11 @@ func (f *fakeCleaner) Clean(context.Context, string, []verify.Verified) ([]store
 type fakeWiki struct {
 	touched    []string
 	reconciles []wiki.ReconcileInput
+	compiles   int
 }
 
 func (f *fakeWiki) Compile(context.Context, string, []store.InterestPoint, []types.Message) ([]string, error) {
+	f.compiles++
 	return f.touched, nil
 }
 func (f *fakeWiki) RebuildEdges(context.Context, string) error { return nil }
@@ -295,8 +297,32 @@ func (f *fakeDeleteVerifier) VerifyCandidates(context.Context, string, []fork.Ca
 	}}, nil
 }
 
+func TestProcessSessionWikiDisabledSkipsWikiStage(t *testing.T) {
+	fw := &fakeWiki{}
+	svc := &Service{
+		cfg:      config.Config{Wiki: config.WikiConfig{Enabled: false}},
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
+		verify:   &fakeDeleteVerifier{},
+		interest: &fakeCleaner{archived: []string{"ip-old"}},
+		wiki:     fw,
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	if fw.compiles != 0 {
+		t.Errorf("Compile called %d times, want 0 when wiki disabled", fw.compiles)
+	}
+	if len(fw.reconciles) != 0 {
+		t.Errorf("ReconcileRelated called %d times, want 0 when wiki disabled", len(fw.reconciles))
+	}
+}
+
 func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
 	svc := &Service{
+		cfg:      config.Default(),
 		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
 		verify:   &fakeDeleteVerifier{},
 		interest: &fakeCleaner{pts: nil, archived: []string{"ip-old"}},
@@ -320,6 +346,7 @@ func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
 
 func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
 	svc := &Service{
+		cfg:      config.Default(),
 		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
 		verify:   &fakeVerifier{},
 		interest: &fakeCleaner{pts: nil, archived: nil},

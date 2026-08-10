@@ -127,23 +127,29 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		return fmt.Errorf("service: flag contradictions: %w", err)
 	}
 
-	// 5-6. wiki: per-interest-point agent-loop write (touched page ids feed
-	// the reconcile stage).
-	touched, err := s.wiki.Compile(ctx, agentID, pts, msgs)
-	if err != nil {
-		return fmt.Errorf("service: wiki compile: %w", err)
-	}
-	// 7. rebuild adjacency from wikilinks
-	if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
-		return fmt.Errorf("service: rebuild edges: %w", err)
-	}
-	// 8. reconcile related pages: propagate structural changes (page writes
-	// + archived interest points) to related pages within max_hops, batched.
-	if err := s.wiki.ReconcileRelated(ctx, agentID, wiki.ReconcileInput{
-		TouchedPages:   touched,
-		ArchivedPoints: archived,
-	}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
-		return fmt.Errorf("service: reconcile: %w", err)
+	// 5-8. wiki: per-interest-point agent-loop write + adjacency rebuild +
+	// related-page reconcile. Skipped entirely when wiki writing is disabled
+	// (config.Wiki.Enabled=false) — interest points and verify#2
+	// contradictions are still persisted.
+	var touched []string
+	if s.cfg.Wiki.Enabled {
+		touched, err = s.wiki.Compile(ctx, agentID, pts, msgs)
+		if err != nil {
+			return fmt.Errorf("service: wiki compile: %w", err)
+		}
+		// 7. rebuild adjacency from wikilinks
+		if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
+			return fmt.Errorf("service: rebuild edges: %w", err)
+		}
+		// 8. reconcile related pages: propagate structural changes (page
+		// writes + archived interest points) to related pages within
+		// max_hops, batched.
+		if err := s.wiki.ReconcileRelated(ctx, agentID, wiki.ReconcileInput{
+			TouchedPages:   touched,
+			ArchivedPoints: archived,
+		}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
+			return fmt.Errorf("service: reconcile: %w", err)
+		}
 	}
 	return nil
 }
