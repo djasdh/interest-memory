@@ -33,6 +33,25 @@ func (f *fakeRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.Res
 	return f.byID, nil
 }
 
+// captureRecall implements recall.RecallService for tests that need to
+// observe the options passed through.
+type captureRecall struct {
+	opts    recall.Options
+	results []recall.Result
+	byID    *recall.Result
+}
+
+func (f *captureRecall) Recall(_ context.Context, _, _ string, opts recall.Options) (string, error) {
+	f.opts = opts
+	return "", nil
+}
+func (f *captureRecall) Search(_ context.Context, _, _ string, _, _ int) ([]recall.Result, error) {
+	return f.results, nil
+}
+func (f *captureRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.Result, error) {
+	return f.byID, nil
+}
+
 func TestPersistContradictionsLogsEdges(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -118,9 +137,50 @@ func TestSetCandidateEventTime(t *testing.T) {
 	}
 }
 
+func TestRecallWikiDisabledForcesNoWiki(t *testing.T) {
+	cr := &captureRecall{}
+	svc := &Service{
+		cfg:    config.Config{Wiki: config.WikiConfig{Enabled: false}, Recall: config.RecallConfig{TopK: 8, IncludeWiki: true, MinScore: 0.3}},
+		recall: cr,
+	}
+	if _, err := svc.Recall(context.Background(), "a", "q", recall.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if cr.opts.IncludeWiki {
+		t.Error("IncludeWiki should be forced false when wiki disabled")
+	}
+}
+
+func TestSearchWikiDisabledFiltersWikiPages(t *testing.T) {
+	cr := &captureRecall{results: []recall.Result{
+		{Kind: "interest_point", ID: "ip1", Title: "a"},
+		{Kind: "wiki_page", ID: "pg1", Title: "b"},
+	}}
+	svc := &Service{cfg: config.Config{Wiki: config.WikiConfig{Enabled: false}}, recall: cr}
+	got, err := svc.Search(context.Background(), "a", "q", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kind != "interest_point" {
+		t.Errorf("search = %+v, want only interest_point", got)
+	}
+}
+
+func TestGetByIDWikiDisabledReturnsNilForWikiPage(t *testing.T) {
+	cr := &captureRecall{byID: &recall.Result{ID: "pg1", Kind: "wiki_page", Title: "b"}}
+	svc := &Service{cfg: config.Config{Wiki: config.WikiConfig{Enabled: false}}, recall: cr}
+	got, err := svc.GetByID(context.Background(), "a", "pg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("GetByID = %+v, want nil for wiki page when wiki disabled", got)
+	}
+}
+
 func TestServiceSearchPassthrough(t *testing.T) {
 	want := []recall.Result{{Kind: "wiki_page", ID: "pg", Title: "T"}}
-	svc := &Service{cfg: config.Config{Search: config.SearchConfig{TopK: 3, MaxBodyLen: 4000}}, recall: &fakeRecall{searchResults: want}}
+	svc := &Service{cfg: config.Config{Wiki: config.WikiConfig{Enabled: true}, Search: config.SearchConfig{TopK: 3, MaxBodyLen: 4000}}, recall: &fakeRecall{searchResults: want}}
 	got, err := svc.Search(context.Background(), "a", "q", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -272,9 +332,11 @@ func (f *fakeCleaner) Clean(context.Context, string, []verify.Verified) ([]store
 type fakeWiki struct {
 	touched    []string
 	reconciles []wiki.ReconcileInput
+	compiles   int
 }
 
 func (f *fakeWiki) Compile(context.Context, string, []store.InterestPoint, []types.Message) ([]string, error) {
+	f.compiles++
 	return f.touched, nil
 }
 func (f *fakeWiki) RebuildEdges(context.Context, string) error { return nil }
@@ -295,8 +357,32 @@ func (f *fakeDeleteVerifier) VerifyCandidates(context.Context, string, []fork.Ca
 	}}, nil
 }
 
+func TestProcessSessionWikiDisabledSkipsWikiStage(t *testing.T) {
+	fw := &fakeWiki{}
+	svc := &Service{
+		cfg:      config.Config{Wiki: config.WikiConfig{Enabled: false}},
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
+		verify:   &fakeDeleteVerifier{},
+		interest: &fakeCleaner{archived: []string{"ip-old"}},
+		wiki:     fw,
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	if fw.compiles != 0 {
+		t.Errorf("Compile called %d times, want 0 when wiki disabled", fw.compiles)
+	}
+	if len(fw.reconciles) != 0 {
+		t.Errorf("ReconcileRelated called %d times, want 0 when wiki disabled", len(fw.reconciles))
+	}
+}
+
 func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
 	svc := &Service{
+		cfg:      config.Default(),
 		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
 		verify:   &fakeDeleteVerifier{},
 		interest: &fakeCleaner{pts: nil, archived: []string{"ip-old"}},
@@ -320,6 +406,7 @@ func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
 
 func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
 	svc := &Service{
+		cfg:      config.Default(),
 		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
 		verify:   &fakeVerifier{},
 		interest: &fakeCleaner{pts: nil, archived: nil},

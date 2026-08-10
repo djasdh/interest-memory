@@ -127,23 +127,29 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		return fmt.Errorf("service: flag contradictions: %w", err)
 	}
 
-	// 5-6. wiki: per-interest-point agent-loop write (touched page ids feed
-	// the reconcile stage).
-	touched, err := s.wiki.Compile(ctx, agentID, pts, msgs)
-	if err != nil {
-		return fmt.Errorf("service: wiki compile: %w", err)
-	}
-	// 7. rebuild adjacency from wikilinks
-	if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
-		return fmt.Errorf("service: rebuild edges: %w", err)
-	}
-	// 8. reconcile related pages: propagate structural changes (page writes
-	// + archived interest points) to related pages within max_hops, batched.
-	if err := s.wiki.ReconcileRelated(ctx, agentID, wiki.ReconcileInput{
-		TouchedPages:   touched,
-		ArchivedPoints: archived,
-	}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
-		return fmt.Errorf("service: reconcile: %w", err)
+	// 5-8. wiki: per-interest-point agent-loop write + adjacency rebuild +
+	// related-page reconcile. Skipped entirely when wiki writing is disabled
+	// (config.Wiki.Enabled=false) — interest points and verify#2
+	// contradictions are still persisted.
+	var touched []string
+	if s.cfg.Wiki.Enabled {
+		touched, err = s.wiki.Compile(ctx, agentID, pts, msgs)
+		if err != nil {
+			return fmt.Errorf("service: wiki compile: %w", err)
+		}
+		// 7. rebuild adjacency from wikilinks
+		if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
+			return fmt.Errorf("service: rebuild edges: %w", err)
+		}
+		// 8. reconcile related pages: propagate structural changes (page
+		// writes + archived interest points) to related pages within
+		// max_hops, batched.
+		if err := s.wiki.ReconcileRelated(ctx, agentID, wiki.ReconcileInput{
+			TouchedPages:   touched,
+			ArchivedPoints: archived,
+		}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
+			return fmt.Errorf("service: reconcile: %w", err)
+		}
 	}
 	return nil
 }
@@ -215,7 +221,11 @@ func (s *Service) Recall(ctx context.Context, agentID, query string, opts recall
 	if opts.TopK <= 0 {
 		opts.TopK = s.cfg.Recall.TopK
 	}
-	if !opts.IncludeWiki {
+	if !s.cfg.Wiki.Enabled {
+		// Wiki pages aren't written when the wiki stage is disabled — never
+		// include them in recall.
+		opts.IncludeWiki = false
+	} else if !opts.IncludeWiki {
 		opts.IncludeWiki = s.cfg.Recall.IncludeWiki
 	}
 	if opts.MinScore <= 0 {
@@ -225,18 +235,41 @@ func (s *Service) Recall(ctx context.Context, agentID, query string, opts recall
 }
 
 // Search is the consumer-side memory_search: structured hits with full
-// content + edges (see recall.Result). topK<=0 falls back to config.
+// content + edges (see recall.Result). topK<=0 falls back to config. Wiki
+// pages are filtered out when the wiki stage is disabled.
 func (s *Service) Search(ctx context.Context, agentID, query string, topK int) ([]recall.Result, error) {
 	if topK <= 0 {
 		topK = s.cfg.Search.TopK
 	}
-	return s.recall.Search(ctx, agentID, query, topK, s.cfg.Search.MaxBodyLen)
+	items, err := s.recall.Search(ctx, agentID, query, topK, s.cfg.Search.MaxBodyLen)
+	if err != nil {
+		return nil, err
+	}
+	if s.cfg.Wiki.Enabled {
+		return items, nil
+	}
+	filtered := items[:0]
+	for _, it := range items {
+		if it.Kind == "wiki_page" {
+			continue
+		}
+		filtered = append(filtered, it)
+	}
+	return filtered, nil
 }
 
 // GetByID fetches one entity (page or interest point) with full content +
-// edges for the consumer-side memory_search id lookup.
+// edges for the consumer-side memory_search id lookup. Wiki pages resolve to
+// nil when the wiki stage is disabled.
 func (s *Service) GetByID(ctx context.Context, agentID, id string) (*recall.Result, error) {
-	return s.recall.GetByID(ctx, agentID, id, s.cfg.Search.MaxBodyLen)
+	r, err := s.recall.GetByID(ctx, agentID, id, s.cfg.Search.MaxBodyLen)
+	if err != nil {
+		return nil, err
+	}
+	if r != nil && !s.cfg.Wiki.Enabled && r.Kind == "wiki_page" {
+		return nil, nil
+	}
+	return r, nil
 }
 
 // SaveTranscript persists a pushed session-end transcript.

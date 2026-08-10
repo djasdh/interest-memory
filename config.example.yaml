@@ -45,6 +45,7 @@ verify:
 # wiki 写入与相关页协同
 # Wiki writing and related-page reconciliation
 wiki:
+  enabled: true                  # 总开关：false 时跳过 wiki 写入/协同，仅保留兴趣点（含矛盾标记）| master switch: false skips wiki writes/reconcile, interest points only
   max_hops: 3                    # 协同图传播深度（至多 3 跳）| graph propagation depth (up to 3 hops)
   batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）| related pages per reconcile agent-loop batch (auto-batched when exceeded)
   language: English              # 页面输出语言（默认英文）| page output language (default English)
