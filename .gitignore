@@ -28,3 +28,6 @@ docs/*-audit.md
 # local build artifacts
 bin/
 dist/
+
+# isolated worktrees
+.worktrees/
