@@ -57,6 +57,7 @@ type SearchConfig struct {
 
 // WikiConfig controls the wiki writing / reconcile stage.
 type WikiConfig struct {
+	Enabled   bool   `yaml:"enabled"`    // master switch: false skips wiki writes entirely (interest points only)
 	MaxHops   int    `yaml:"max_hops"`   // graph propagation depth for reconciliation
 	BatchSize int    `yaml:"batch_size"` // related pages per reconcile agent-loop batch
 	Language  string `yaml:"language"`   // wiki page output language (default English)
@@ -159,6 +160,7 @@ func Default() Config {
 			MaxCandidates:  30,
 		},
 		Wiki: WikiConfig{
+			Enabled:   true,
 			MaxHops:   3,
 			BatchSize: 10,
 		},

@@ -59,6 +59,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Wiki.MaxHops != 3 || cfg.Wiki.BatchSize != 10 {
 		t.Errorf("default wiki = %+v, want MaxHops=3 BatchSize=10", cfg.Wiki)
 	}
+	if !cfg.Wiki.Enabled {
+		t.Error("default wiki.enabled = false, want true")
+	}
 	if cfg.Search.TopK != 3 || cfg.Search.MaxBodyLen != 4000 {
 		t.Errorf("default search = %+v, want TopK=3 MaxBodyLen=4000", cfg.Search)
 	}
@@ -113,6 +116,20 @@ verify:
 	// Unset keys keep defaults
 	if cfg.Recall.TopK != 8 {
 		t.Errorf("recall.top_k = %d, want default 8", cfg.Recall.TopK)
+	}
+	content = `
+wiki:
+  enabled: false
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Wiki.Enabled {
+		t.Error("wiki.enabled = true, want false")
 	}
 }
 
