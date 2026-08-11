@@ -237,13 +237,21 @@ func TestExtractNonSelectiveSkipsWikiWorthy(t *testing.T) {
 
 func TestDedupePreservesWikiWorthy(t *testing.T) {
 	f := false
-	cands := []Candidate{
+	// verdict on the kept candidate, nil incoming → preserved
+	out := dedupe([]Candidate{
 		{Topic: "topic", Confidence: 0.5, WikiWorthy: &f},
 		{Topic: "topic", Confidence: 0.9},
-	}
-	out := dedupe(cands)
+	})
 	if len(out) != 1 || out[0].WikiWorthy == nil || *out[0].WikiWorthy {
-		t.Errorf("dedupe lost the false verdict: %+v", out)
+		t.Errorf("case1: verdict lost: %+v", out)
+	}
+	// nil kept candidate, verdict on incoming → adopted (the new branch)
+	out = dedupe([]Candidate{
+		{Topic: "topic", Confidence: 0.5},
+		{Topic: "topic", Confidence: 0.9, WikiWorthy: &f},
+	})
+	if len(out) != 1 || out[0].WikiWorthy == nil || *out[0].WikiWorthy {
+		t.Errorf("case2: incoming verdict not adopted: %+v", out)
 	}
 }
 

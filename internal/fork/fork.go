@@ -23,8 +23,10 @@ type Candidate struct {
 	Subjective bool     `json:"subjective"` // subjective preference/opinion (exempt from verify's web fact-check)
 	// WikiWorthy is the LLM's verdict (selective mode) on whether this topic
 	// deserves its own wiki page. nil = not judged (treated as worthy).
-	WikiWorthy *bool     `json:"wiki_worthy,omitempty"`
-	EventTime  time.Time `json:"-"`
+	WikiWorthy *bool `json:"wiki_worthy,omitempty"`
+	// EventTime is the session event time, set by the service layer after
+	// extraction (LLM never sees this field).
+	EventTime time.Time `json:"-"`
 }
 
 // LLM is the chat surface fork needs (implemented by *llm.Client).
@@ -339,6 +341,8 @@ func dedupe(cands []Candidate) []Candidate {
 		if c.TurnRange[1] > merged.TurnRange[1] {
 			merged.TurnRange[1] = c.TurnRange[1]
 		}
+		// First non-nil verdict wins among duplicates (matches "base window missed
+		// the judgment, a later window judged it" — never overwrite an existing verdict).
 		if merged.WikiWorthy == nil && c.WikiWorthy != nil {
 			merged.WikiWorthy = c.WikiWorthy
 		}
