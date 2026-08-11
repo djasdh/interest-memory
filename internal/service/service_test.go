@@ -333,10 +333,12 @@ type fakeWiki struct {
 	touched    []string
 	reconciles []wiki.ReconcileInput
 	compiles   int
+	compiled   []store.InterestPoint
 }
 
-func (f *fakeWiki) Compile(context.Context, string, []store.InterestPoint, []types.Message) ([]string, error) {
+func (f *fakeWiki) Compile(_ context.Context, _ string, pts []store.InterestPoint, _ []types.Message) ([]string, error) {
 	f.compiles++
+	f.compiled = pts
 	return f.touched, nil
 }
 func (f *fakeWiki) RebuildEdges(context.Context, string) error { return nil }
@@ -421,6 +423,54 @@ func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
 	fw := svc.wiki.(*fakeWiki)
 	if len(fw.reconciles) != 0 {
 		t.Errorf("reconcile called for no-op run: %+v", fw.reconciles)
+	}
+}
+
+func TestProcessSessionSelectiveFiltersNotWorthy(t *testing.T) {
+	f := false
+	fw := &fakeWiki{}
+	svc := &Service{
+		cfg:    config.Config{Wiki: config.WikiConfig{Enabled: true, Selective: true}},
+		fork:   &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
+		verify: &fakeVerifier{},
+		interest: &fakeCleaner{pts: []store.InterestPoint{
+			{ID: "ip-worthy", Name: "w"},
+			{ID: "ip-no", Name: "n", WikiWorthy: &f},
+		}},
+		wiki: fw,
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	if fw.compiles != 1 {
+		t.Fatalf("Compile called %d times, want 1", fw.compiles)
+	}
+	if len(fw.compiled) != 1 || fw.compiled[0].ID != "ip-worthy" {
+		t.Errorf("compiled = %+v, want only ip-worthy", fw.compiled)
+	}
+}
+
+func TestProcessSessionNonSelectivePassesAll(t *testing.T) {
+	f := false
+	fw := &fakeWiki{}
+	svc := &Service{
+		cfg:      config.Config{Wiki: config.WikiConfig{Enabled: true}},
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
+		verify:   &fakeVerifier{},
+		interest: &fakeCleaner{pts: []store.InterestPoint{{ID: "ip-no", Name: "n", WikiWorthy: &f}}},
+		wiki:     fw,
+	}
+	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+	if len(fw.compiled) != 1 || fw.compiled[0].ID != "ip-no" {
+		t.Errorf("compiled = %+v, want all points", fw.compiled)
 	}
 }
 

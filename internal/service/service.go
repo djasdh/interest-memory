@@ -133,7 +133,19 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	// contradictions are still persisted.
 	var touched []string
 	if s.cfg.Wiki.Enabled {
-		touched, err = s.wiki.Compile(ctx, agentID, pts, msgs)
+		ptsForWiki := pts
+		if s.cfg.Wiki.Selective {
+			// Selective mode: only points the fork LLM judged worthy (nil =
+			// not judged → worthy) become wiki pages; the rest stay as
+			// interest-point-only records.
+			ptsForWiki = make([]store.InterestPoint, 0, len(pts))
+			for _, p := range pts {
+				if p.WikiWorthy == nil || *p.WikiWorthy {
+					ptsForWiki = append(ptsForWiki, p)
+				}
+			}
+		}
+		touched, err = s.wiki.Compile(ctx, agentID, ptsForWiki, msgs)
 		if err != nil {
 			return fmt.Errorf("service: wiki compile: %w", err)
 		}
