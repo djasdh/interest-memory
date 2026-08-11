@@ -68,7 +68,7 @@ func New(
 	return &Service{
 		cfg:      cfg,
 		store:    st,
-		fork:     fork.NewAnalyzer(llmClient, cfg.Fork),
+		fork:     fork.NewAnalyzer(llmClient, cfg.Fork, cfg.Wiki.Selective),
 		verify:   verifier,
 		interest: interest.New(embedder, vi, st, cfg.Fork),
 		wiki:     wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage()),

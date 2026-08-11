@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -190,7 +191,7 @@ func TestExtractParsesSubjective(t *testing.T) {
 		{Topic: "喜欢 Go", Confidence: 0.9, Subjective: true},
 		{Topic: "Go 1.24 特性", Confidence: 0.8, Subjective: false},
 	}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
@@ -204,6 +205,45 @@ func TestExtractParsesSubjective(t *testing.T) {
 	// Prompt should ask the model to judge subjectivity.
 	if !contains(m.prompt, "subjective") {
 		t.Error("prompt should mention subjective judgment")
+	}
+}
+
+func TestExtractSelectiveAsksWikiWorthy(t *testing.T) {
+	f := false
+	m := &mockLLM{cands: []Candidate{{Topic: "t", Confidence: 0.9, WikiWorthy: &f}}}
+	a := NewAnalyzer(m, analyzeCfg(), true)
+	cands, err := a.Analyze(context.Background(), "a", [][]llm.Message{turnsFrom("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.prompt, "wiki_worthy") {
+		t.Error("selective prompt should ask for wiki_worthy")
+	}
+	if len(cands) != 1 || cands[0].WikiWorthy == nil || *cands[0].WikiWorthy {
+		t.Errorf("wiki_worthy = %+v, want false", cands[0].WikiWorthy)
+	}
+}
+
+func TestExtractNonSelectiveSkipsWikiWorthy(t *testing.T) {
+	m := &mockLLM{cands: []Candidate{{Topic: "t", Confidence: 0.9}}}
+	a := NewAnalyzer(m, analyzeCfg(), false)
+	if _, err := a.Analyze(context.Background(), "a", [][]llm.Message{turnsFrom("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(m.prompt, "wiki_worthy") {
+		t.Error("non-selective prompt should not mention wiki_worthy")
+	}
+}
+
+func TestDedupePreservesWikiWorthy(t *testing.T) {
+	f := false
+	cands := []Candidate{
+		{Topic: "topic", Confidence: 0.5, WikiWorthy: &f},
+		{Topic: "topic", Confidence: 0.9},
+	}
+	out := dedupe(cands)
+	if len(out) != 1 || out[0].WikiWorthy == nil || *out[0].WikiWorthy {
+		t.Errorf("dedupe lost the false verdict: %+v", out)
 	}
 }
 
@@ -223,7 +263,7 @@ func TestAnalyzeMapsTurnRangeToGlobalIndex(t *testing.T) {
 		{Topic: "x", Confidence: 0.9, TurnRange: [2]int{2, 4}},
 		{Topic: "y", Confidence: 0.9, TurnRange: [2]int{0, 0}}, // no range
 	}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{msgs})
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
@@ -264,7 +304,7 @@ func TestDedupe(t *testing.T) {
 func TestAnalyzeDedupesAcrossWindows(t *testing.T) {
 	// Same topic surfaced by every prefix window merges into one candidate.
 	m := &mockLLM{cands: []Candidate{{Topic: "dup", Confidence: 0.9}}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
@@ -287,7 +327,7 @@ func TestAnalyzeFiltersLowConfidence(t *testing.T) {
 		{Topic: "drop-low", Confidence: 0.2},
 		{Topic: "keep-edge", Confidence: 0.3}, // boundary ≥ min(0.3)
 	}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
@@ -312,7 +352,7 @@ func TestAnalyzeMergesAcrossWindows(t *testing.T) {
 		{{Topic: "w2", Confidence: 0.9}},
 		{{Topic: "w3", Confidence: 0.9}},
 	}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
@@ -340,7 +380,7 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 	}}
 	cfg := analyzeCfg()
 	cfg.MaxCandidates = 1
-	a := NewAnalyzer(m, cfg)
+	a := NewAnalyzer(m, cfg, false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
@@ -367,7 +407,7 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 
 func TestAnalyzeSkipsEmptyWindow(t *testing.T) {
 	m := &mockLLM{cands: []Candidate{{Topic: "x", Confidence: 0.9}}}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
 		turnsFrom("real"),
 		turnsFrom(), // no content → no LLM call
@@ -385,7 +425,7 @@ func TestAnalyzeSkipsEmptyWindow(t *testing.T) {
 
 func TestAnalyzeLLMErrorPropagates(t *testing.T) {
 	m := &mockLLM{chatErr: errors.New("boom")}
-	a := NewAnalyzer(m, analyzeCfg())
+	a := NewAnalyzer(m, analyzeCfg(), false)
 	_, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
 	if err == nil {
 		t.Fatal("expected error from LLM, got nil")

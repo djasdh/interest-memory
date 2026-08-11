@@ -21,9 +21,10 @@ type Candidate struct {
 	Tags       []string `json:"tags"`
 	TurnRange  [2]int   `json:"turn_range"` // [start_turn, end_turn] 1-indexed
 	Subjective bool     `json:"subjective"` // subjective preference/opinion (exempt from verify's web fact-check)
-	// EventTime is the session event time, set by the service layer after
-	// extraction (LLM never sees this field).
-	EventTime time.Time `json:"-"`
+	// WikiWorthy is the LLM's verdict (selective mode) on whether this topic
+	// deserves its own wiki page. nil = not judged (treated as worthy).
+	WikiWorthy *bool     `json:"wiki_worthy,omitempty"`
+	EventTime  time.Time `json:"-"`
 }
 
 // LLM is the chat surface fork needs (implemented by *llm.Client).
@@ -49,10 +50,11 @@ type Analyzer struct {
 	maxConcurrency int
 	maxCandidates  int
 	minConfidence  float64
+	selective      bool
 }
 
 // NewAnalyzer builds an Analyzer from fork config.
-func NewAnalyzer(client LLM, cfg config.ForkConfig) *Analyzer {
+func NewAnalyzer(client LLM, cfg config.ForkConfig, selective bool) *Analyzer {
 	if cfg.PrefixStep <= 0 {
 		cfg.PrefixStep = 5
 	}
@@ -72,6 +74,7 @@ func NewAnalyzer(client LLM, cfg config.ForkConfig) *Analyzer {
 		maxConcurrency: cfg.MaxConcurrency,
 		maxCandidates:  cfg.MaxCandidates,
 		minConfidence:  cfg.MinConfidence,
+		selective:      selective,
 	}
 }
 
@@ -216,13 +219,13 @@ Return a JSON array of objects, each with:
   - "tags": array of short tags (max 5)
   - "turn_range": [start_turn, end_turn] (approximate turn numbers from the excerpt)
   - "subjective": true if this is a subjective preference/opinion, false if objective
-
+%s
 If nothing is worth remembering, return an empty array [].
 
 Conversation excerpt:
 %s
 
-Return ONLY valid JSON, no other text.`, snapshot)
+Return ONLY valid JSON, no other text.`, wikiWorthyClause(a.selective), snapshot)
 
 	var cands []Candidate
 	if err := a.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &cands); err != nil {
@@ -240,6 +243,15 @@ Return ONLY valid JSON, no other text.`, snapshot)
 		filtered = filtered[:a.maxCandidates]
 	}
 	return filtered, nil
+}
+
+// wikiWorthyClause returns the optional wiki_worthy judgment instruction
+// (selective mode only). Not every remembered topic deserves a wiki page.
+func wikiWorthyClause(selective bool) string {
+	if !selective {
+		return ""
+	}
+	return `  - "wiki_worthy": true if this topic deserves its own wiki page (durable, self-contained, non-trivial, still useful in future sessions); false if it is trivial, ephemeral, or a minor detail that does not merit a dedicated page. Judge honestly — not every remembered topic needs a wiki page.`
 }
 
 // renderIndices returns the global message indexes that summarize() renders,
@@ -326,6 +338,9 @@ func dedupe(cands []Candidate) []Candidate {
 		}
 		if c.TurnRange[1] > merged.TurnRange[1] {
 			merged.TurnRange[1] = c.TurnRange[1]
+		}
+		if merged.WikiWorthy == nil && c.WikiWorthy != nil {
+			merged.WikiWorthy = c.WikiWorthy
 		}
 		for _, tag := range c.Tags {
 			if !containsString(merged.Tags, tag) {
