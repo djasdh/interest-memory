@@ -418,6 +418,44 @@ func TestResolveReplacementNoneWhenNoSequel(t *testing.T) {
 	}
 }
 
+func TestInterestPointWikiWorthyRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	f, tf := false, true
+	cases := []struct {
+		id   string
+		val  *bool
+		want *bool
+	}{
+		{"ip-nil", nil, nil},
+		{"ip-false", &f, &f},
+		{"ip-true", &tf, &tf},
+	}
+	for _, c := range cases {
+		p := InterestPoint{ID: c.id, AgentID: "a", Name: c.id, Status: "active", WikiWorthy: c.val}
+		if err := s.UpsertInterestPoint(ctx, p); err != nil {
+			t.Fatalf("Upsert %s: %v", c.id, err)
+		}
+		got, err := s.GetInterestPoint(ctx, "a", c.id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", c.id, err)
+		}
+		if (got.WikiWorthy == nil) != (c.want == nil) {
+			t.Fatalf("%s wiki_worthy = %+v, want %+v", c.id, got.WikiWorthy, c.want)
+		}
+		if c.want != nil && (got.WikiWorthy == nil || *got.WikiWorthy != *c.want) {
+			t.Errorf("%s wiki_worthy = %+v, want %+v", c.id, got.WikiWorthy, c.want)
+		}
+	}
+	all, err := s.ListInterestPoints(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Errorf("list = %d, want 3", len(all))
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	s, err := Open(":memory:")

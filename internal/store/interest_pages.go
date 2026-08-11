@@ -19,8 +19,8 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 			id, agent_id, name, summary, keywords, importance, status, subjective,
 			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
-			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids, wiki_worthy
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, agent_id) DO UPDATE SET
 			name = excluded.name,
 			summary = excluded.summary,
@@ -39,12 +39,14 @@ func (s *SQLiteStore) UpsertInterestPoint(ctx context.Context, p InterestPoint) 
 			ttl_days = excluded.ttl_days,
 			last_seen_at = excluded.last_seen_at,
 			seen_count = excluded.seen_count,
-			source_session_ids = excluded.source_session_ids`,
+			source_session_ids = excluded.source_session_ids,
+			wiki_worthy = excluded.wiki_worthy`,
 		p.ID, p.AgentID, p.Name, p.Summary, marshalJSON(p.Keywords), p.Importance, p.Status,
 		boolInt(p.Subjective), p.TurnRange[0], p.TurnRange[1], nullableTime(p.EventTime),
 		p.Reliability.Confidence, p.Reliability.Status, marshalJSON(p.Reliability.Evidence),
 		p.Freshness.Level, p.Freshness.UpdatedAt, p.Freshness.TTLDays,
 		p.FirstSeenAt, p.LastSeenAt, p.SeenCount, marshalJSON(p.SourceSessions),
+		nullableBool(p.WikiWorthy),
 	)
 	if err != nil {
 		return fmt.Errorf("store: upsert interest point: %w", err)
@@ -57,7 +59,7 @@ func (s *SQLiteStore) GetInterestPoint(ctx context.Context, agentID, id string) 
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
-			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
+			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids, wiki_worthy
 		FROM interest_points WHERE id = ? AND agent_id = ?`, id, agentID)
 	p, err := scanInterestPoint(row)
 	if err == sql.ErrNoRows {
@@ -74,7 +76,7 @@ func (s *SQLiteStore) ListInterestPoints(ctx context.Context, agentID string) ([
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
-			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
+			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids, wiki_worthy
 		FROM interest_points WHERE agent_id = ? ORDER BY importance DESC`, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list interest points: %w", err)
@@ -100,7 +102,7 @@ func (s *SQLiteStore) SearchInterestPointsByKeywords(ctx context.Context, agentI
 		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
 			turn_range_start, turn_range_end, event_time,
 			confidence, reliability_status, evidence, freshness_level, updated_at,
-			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids
+			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids, wiki_worthy
 		FROM interest_points
 		WHERE agent_id = ? AND (lower(name) LIKE ? OR lower(summary) LIKE ? OR lower(keywords) LIKE ?)
 		ORDER BY importance DESC LIMIT ?`, agentID, pattern, pattern, pattern, limit)
@@ -128,12 +130,13 @@ func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	var keywords, evidence, sessions string
 	var subjective, trStart, trEnd int
 	var evt sql.NullTime
+	var ww sql.NullInt64
 	err := row.Scan(
 		&p.ID, &p.AgentID, &p.Name, &p.Summary, &keywords, &p.Importance, &p.Status,
 		&subjective, &trStart, &trEnd, &evt,
 		&p.Reliability.Confidence, &p.Reliability.Status, &evidence, &p.Freshness.Level,
 		&p.Freshness.UpdatedAt, &p.Freshness.TTLDays, &p.FirstSeenAt, &p.LastSeenAt,
-		&p.SeenCount, &sessions,
+		&p.SeenCount, &sessions, &ww,
 	)
 	if err != nil {
 		return nil, err
@@ -145,6 +148,10 @@ func scanInterestPoint(row rowScanner) (*InterestPoint, error) {
 	p.TurnRange = [2]int{trStart, trEnd}
 	if evt.Valid {
 		p.EventTime = evt.Time
+	}
+	if ww.Valid {
+		b := ww.Int64 != 0
+		p.WikiWorthy = &b
 	}
 	return &p, nil
 }

@@ -60,6 +60,9 @@ type InterestPoint struct {
 	LastSeenAt     time.Time   `json:"last_seen_at"`
 	SeenCount      int         `json:"seen_count"`
 	SourceSessions []string    `json:"source_session_ids"`
+	// WikiWorthy is the LLM's verdict (selective mode) on whether this point
+	// deserves its own wiki page. nil = not judged (treated as worthy).
+	WikiWorthy *bool `json:"wiki_worthy,omitempty"`
 }
 
 // PageType enumerates wiki page kinds.

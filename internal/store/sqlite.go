@@ -106,6 +106,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			last_seen_at TIMESTAMP NOT NULL,
 			seen_count INTEGER NOT NULL DEFAULT 0,
 			source_session_ids TEXT NOT NULL DEFAULT '[]',
+			wiki_worthy INTEGER,
 			PRIMARY KEY (id, agent_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS wiki_pages (
@@ -202,6 +203,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE session_transcripts ADD COLUMN session_date TIMESTAMP`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN event_time TIMESTAMP`)
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE wiki_pages ADD COLUMN event_time TIMESTAMP`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE interest_points ADD COLUMN wiki_worthy INTEGER`)
 	return nil
 }
 
@@ -246,6 +248,18 @@ func unmarshalJSON(data string, out any) {
 // boolInt converts a bool to SQLite INTEGER storage.
 func boolInt(b bool) int {
 	if b {
+		return 1
+	}
+	return 0
+}
+
+// nullableBool converts a *bool to SQLite storage: nil → NULL, true → 1,
+// false → 0.
+func nullableBool(v *bool) any {
+	if v == nil {
+		return nil
+	}
+	if *v {
 		return 1
 	}
 	return 0
