@@ -344,6 +344,43 @@ func TestCleanRelationUpdateMergesIntoOld(t *testing.T) {
 	}
 }
 
+func TestCleanPropagatesWikiWorthy(t *testing.T) {
+	f, tf := false, true
+	st := newFakeStore()
+	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})
+
+	// create propagates the LLM verdict (false).
+	v := vv("点A", 0.9)
+	v.Candidate.WikiWorthy = &f
+	if _, _, err := c.Clean(context.Background(), "a", []verify.Verified{v}); err != nil {
+		t.Fatal(err)
+	}
+	if st.upsert == nil || st.upsert.WikiWorthy == nil || *st.upsert.WikiWorthy {
+		t.Errorf("created wiki_worthy = %+v, want false", st.upsert.WikiWorthy)
+	}
+
+	// merge overwrites with a newer verdict (true).
+	id := st.upsert.ID
+	c2 := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{{ID: id, Kind: "interest_point", Score: 0.95}}}, st, config.ForkConfig{})
+	v2 := vv("点A", 0.9)
+	v2.Candidate.WikiWorthy = &tf
+	if _, _, err := c2.Clean(context.Background(), "a", []verify.Verified{v2}); err != nil {
+		t.Fatal(err)
+	}
+	if st.upsert.WikiWorthy == nil || !*st.upsert.WikiWorthy {
+		t.Errorf("merged wiki_worthy = %+v, want true", st.upsert.WikiWorthy)
+	}
+
+	// merge keeps the existing verdict when the new candidate has none.
+	v3 := vv("点A", 0.9)
+	if _, _, err := c2.Clean(context.Background(), "a", []verify.Verified{v3}); err != nil {
+		t.Fatal(err)
+	}
+	if st.upsert.WikiWorthy == nil || !*st.upsert.WikiWorthy {
+		t.Errorf("merged wiki_worthy = %+v, want retained true", st.upsert.WikiWorthy)
+	}
+}
+
 func TestCleanSubjectivePropagatesToCreated(t *testing.T) {
 	st := newFakeStore()
 	c := New(fakeEmbedder{}, &fakeVec{}, st, config.ForkConfig{})

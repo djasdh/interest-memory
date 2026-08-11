@@ -260,6 +260,7 @@ func (c *cleaner) create(ctx context.Context, agentID string, v verify.Verified,
 		LastSeenAt:     fresh.UpdatedAt,
 		SeenCount:      1,
 		SourceSessions: []string{},
+		WikiWorthy:     v.Candidate.WikiWorthy,
 	}
 	if err := c.store.UpsertInterestPoint(ctx, pt); err != nil {
 		return nil, err
@@ -285,6 +286,10 @@ func (c *cleaner) merge(existing *store.InterestPoint, v verify.Verified) store.
 		p.Reliability = v.Reliability
 	}
 	p.Freshness = v.Freshness
+	// A newer LLM verdict overrides the stored one; absence keeps the old.
+	if v.Candidate.WikiWorthy != nil {
+		p.WikiWorthy = v.Candidate.WikiWorthy
+	}
 	for _, kw := range v.Candidate.Tags {
 		if !containsString(p.Keywords, kw) {
 			p.Keywords = append(p.Keywords, kw)
