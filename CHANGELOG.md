@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Selective wiki writes** — `wiki.selective` (default off): fork LLM judges
+  each interest point's `wiki_worthy`; points judged not worth a wiki page are
+  kept as interest points only.
+
 ## [0.1.0] - 2026-08-08
 
 Initial open-source release.
