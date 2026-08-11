@@ -58,6 +58,7 @@ type SearchConfig struct {
 // WikiConfig controls the wiki writing / reconcile stage.
 type WikiConfig struct {
 	Enabled   bool   `yaml:"enabled"`    // master switch: false skips wiki writes entirely (interest points only)
+	Selective bool   `yaml:"selective"`  // selective writes: fork LLM judges each point's wiki_worthy; not-worthy points stay as interest points only
 	MaxHops   int    `yaml:"max_hops"`   // graph propagation depth for reconciliation
 	BatchSize int    `yaml:"batch_size"` // related pages per reconcile agent-loop batch
 	Language  string `yaml:"language"`   // wiki page output language (default English)

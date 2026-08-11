@@ -62,6 +62,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.Wiki.Enabled {
 		t.Error("default wiki.enabled = false, want true")
 	}
+	if cfg.Wiki.Selective {
+		t.Error("default wiki.selective = true, want false")
+	}
 	if cfg.Search.TopK != 3 || cfg.Search.MaxBodyLen != 4000 {
 		t.Errorf("default search = %+v, want TopK=3 MaxBodyLen=4000", cfg.Search)
 	}
@@ -130,6 +133,20 @@ wiki:
 	}
 	if cfg.Wiki.Enabled {
 		t.Error("wiki.enabled = true, want false")
+	}
+	content = `
+wiki:
+  selective: true
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Wiki.Selective {
+		t.Error("wiki.selective = false, want true")
 	}
 }
 

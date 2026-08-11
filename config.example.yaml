@@ -46,6 +46,7 @@ verify:
 # Wiki writing and related-page reconciliation
 wiki:
   enabled: true                  # 总开关：false 时跳过 wiki 写入/协同，仅保留兴趣点（含矛盾标记）| master switch: false skips wiki writes/reconcile, interest points only
+  selective: false               # 选择性写 wiki：fork 判定每点 wiki_worthy，不值得的点仅保留兴趣点（默认关=全转）| selective writes: fork LLM judges wiki_worthy per point; not-worthy points stay as interest points only (default off = write all)
   max_hops: 3                    # 协同图传播深度（至多 3 跳）| graph propagation depth (up to 3 hops)
   batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）| related pages per reconcile agent-loop batch (auto-batched when exceeded)
   language: English              # 页面输出语言（默认英文）| page output language (default English)
