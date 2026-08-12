@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/config"
@@ -20,6 +21,10 @@ import (
 	"github.com/djasdh/my-agent-core/provider"
 	"github.com/djasdh/my-agent-core/types"
 )
+
+// namespaceCacheTTL is how long the "all" namespace-sharing mode caches the
+// discovered namespace list before re-reading the store.
+const namespaceCacheTTL = 30 * time.Second
 
 // Service orchestrates the full memory pipeline: it wires the
 // domain services together and exposes the operations the worker queue and
@@ -149,8 +154,8 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		if err != nil {
 			return fmt.Errorf("service: wiki compile: %w", err)
 		}
-		// 7. rebuild adjacency from wikilinks
-		if err := s.wiki.RebuildEdges(ctx, agentID); err != nil {
+		// 7. rebuild adjacency from wikilinks (incremental: touched pages only)
+		if err := s.wiki.RebuildEdges(ctx, agentID, touched); err != nil {
 			return fmt.Errorf("service: rebuild edges: %w", err)
 		}
 		// 8. reconcile related pages: propagate structural changes (page
@@ -206,11 +211,27 @@ func (s *Service) persistContradictions(ctx context.Context, agentID string, pts
 func buildNamespaceResolver(cfg config.Config, st store.Store) recall.NamespaceResolver {
 	switch cfg.Namespaces.Mode {
 	case config.NamespaceAll:
+		var (
+			mu      sync.Mutex
+			cached  []string
+			expires time.Time
+		)
 		return func(ctx context.Context, agentID string) ([]string, error) {
+			mu.Lock()
+			if cached != nil && time.Now().Before(expires) {
+				ids := cached
+				mu.Unlock()
+				return ids, nil
+			}
+			mu.Unlock()
 			ids, err := st.ListAgentIDs(ctx)
 			if err != nil {
 				return nil, err
 			}
+			mu.Lock()
+			cached = ids
+			expires = time.Now().Add(namespaceCacheTTL)
+			mu.Unlock()
 			return ids, nil
 		}
 	case config.NamespaceCustom:
@@ -306,22 +327,22 @@ func (s *Service) ListPendingLinks(ctx context.Context, agentID string) ([]store
 
 // Stats returns simple counts for an agent.
 func (s *Service) Stats(ctx context.Context, agentID string) (map[string]int, error) {
-	ips, err := s.store.ListInterestPoints(ctx, agentID)
+	ips, err := s.store.CountInterestPoints(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
-	pages, err := s.store.ListPages(ctx, agentID, "")
+	pages, err := s.store.CountPages(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
-	cons, err := s.store.ListContradictions(ctx, agentID)
+	cons, err := s.store.CountContradictions(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]int{
-		"interest_points": len(ips),
-		"wiki_pages":      len(pages),
-		"contradictions":  len(cons),
+		"interest_points": ips,
+		"wiki_pages":      pages,
+		"contradictions":  cons,
 	}, nil
 }
 

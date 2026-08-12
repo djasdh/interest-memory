@@ -579,7 +579,7 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 	}
 
 	w := NewWriter(deps, nil, "English")
-	if err := w.RebuildEdges(ctx, "agent-a"); err != nil {
+	if err := w.RebuildEdges(ctx, "agent-a", []string{"page-a"}); err != nil {
 		t.Fatalf("RebuildEdges: %v", err)
 	}
 	edges, err := st.Outlinks(ctx, "agent-a", "page-a")
@@ -604,7 +604,7 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 		Title: "C", PageType: store.PageConcept, BodyMD: "c", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.RebuildEdges(ctx, "agent-a"); err != nil {
+	if err := w.RebuildEdges(ctx, "agent-a", []string{"page-a"}); err != nil {
 		t.Fatalf("RebuildEdges (2nd): %v", err)
 	}
 	pending2, _ := st.ListPendingLinks(ctx, "agent-a")

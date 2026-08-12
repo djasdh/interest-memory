@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/llm"
@@ -20,7 +21,9 @@ import (
 // caller can reconcile related pages.
 type Compiler interface {
 	Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error)
-	RebuildEdges(ctx context.Context, agentID string) error
+	// RebuildEdges regenerates adjacency for the given touched page ids only
+	// (incremental), unlike a full re-scan of every agent page.
+	RebuildEdges(ctx context.Context, agentID string, touched []string) error
 	// ReconcileRelated propagates structural changes (written/updated pages,
 	// archived interest points) to related pages within maxHops, in batches.
 	ReconcileRelated(ctx context.Context, agentID string, in ReconcileInput, maxHops, batchSize int) error
@@ -100,9 +103,15 @@ func (w *Writer) toolsFor(agentID string) []types.Tool {
 	}
 }
 
-// Compile writes one wiki page per interest point via a dedicated agent loop
-// (serial, no parallelism — avoids write races). Each point's prompt carries
-// its evidence, the exact conversation segment (by TurnRange), and a
+// maxCompileConcurrency bounds how many interest points the wiki stage writes
+// in parallel. Writes stay safe because the store serializes per-agent writes;
+// this only bounds the number of in-flight LLM agent loops (and thus peak
+// request rate/cost).
+const maxCompileConcurrency = 4
+
+// Compile writes one wiki page per interest point via dedicated agent loops,
+// run concurrently (bounded by maxCompileConcurrency). Each point's prompt
+// carries its evidence, the exact conversation segment (by TurnRange), and a
 // pre-looked-up related-page summary. Returns the page ids touched this run.
 func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error) {
 	if w.prov == nil {
@@ -117,32 +126,61 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 	}
 
 	tools := w.toolsFor(agentID)
-	var touched []string
-	for _, ip := range pts {
-		related := prelookupRelated(ctx, w.deps, agentID, ip)
-		dialog := dialogSegment(msgs, ip.TurnRange)
-		prompt := buildPointPrompt(ip, dialog, related, w.lang)
+	results := make([]compileResult, len(pts))
+	sem := make(chan struct{}, maxCompileConcurrency)
+	var wg sync.WaitGroup
+	for i, ip := range pts {
+		wg.Add(1)
+		go func(i int, ip store.InterestPoint) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i] = w.compileOne(ctx, agentID, p, tools, ip, msgs)
+		}(i, ip)
+	}
+	wg.Wait()
 
-		var pointTouched []string
-		loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
-		err := w.runLoop(loopCtx, p, w.system, tools, types.Message{Role: types.RoleUser, Text: prompt}, func(ev types.Event) {
-			if ev.Type == "tool_execution_end" && ev.ToolName == "wiki_write" {
-				if id, ok := ev.Args["id"].(string); ok && id != "" {
-					pointTouched = append(pointTouched, id)
-				}
-			}
-		})
-		cancel()
-		if err != nil {
-			return touched, fmt.Errorf("wiki: point %q: %w", ip.Name, err)
+	var touched []string
+	for _, r := range results {
+		if r.err != nil {
+			return touched, r.err
 		}
-		// Backfill EventTime on pages the agent wrote without event_time.
-		if !ip.EventTime.IsZero() {
-			w.backfillEventTime(ctx, agentID, pointTouched, ip.EventTime)
-		}
-		touched = append(touched, pointTouched...)
+		touched = append(touched, r.touched...)
 	}
 	return touched, nil
+}
+
+// compileResult is one interest point's wiki-write outcome.
+type compileResult struct {
+	touched []string
+	err     error
+}
+
+// compileOne runs the agent loop for a single interest point, returning the
+// page ids it wrote (and, on failure, the first error).
+func (w *Writer) compileOne(ctx context.Context, agentID string, p *provider.Provider, tools []types.Tool, ip store.InterestPoint, msgs []types.Message) compileResult {
+	related := prelookupRelated(ctx, w.deps, agentID, ip)
+	dialog := dialogSegment(msgs, ip.TurnRange)
+	prompt := buildPointPrompt(ip, dialog, related, w.lang)
+
+	var pointTouched []string
+	loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
+	err := w.runLoop(loopCtx, p, w.system, tools, types.Message{Role: types.RoleUser, Text: prompt}, func(ev types.Event) {
+		if ev.Type == "tool_execution_end" && ev.ToolName == "wiki_write" {
+			if id, ok := ev.Args["id"].(string); ok && id != "" {
+				pointTouched = append(pointTouched, id)
+			}
+		}
+	})
+	cancel()
+	if err != nil {
+		return compileResult{err: fmt.Errorf("wiki: point %q: %w", ip.Name, err)}
+	}
+	// Backfill EventTime on pages the agent wrote without event_time.
+	if !ip.EventTime.IsZero() {
+		w.backfillEventTime(ctx, agentID, pointTouched, ip.EventTime)
+	}
+	return compileResult{touched: pointTouched}
 }
 
 // backfillEventTime stamps pages whose EventTime the agent omitted, using the
@@ -289,52 +327,91 @@ func prelookupRelated(ctx context.Context, deps ToolsDeps, agentID string, ip st
 	return b.String()
 }
 
-// RebuildEdges regenerates the adjacency table from page body wikilinks.
-// (Contradictions are persisted separately by service.persistContradictions,
-// pipeline step 4.)
-func (w *Writer) RebuildEdges(ctx context.Context, agentID string) error {
-	pages, err := w.deps.Store.ListPages(ctx, agentID, "")
-	if err != nil {
-		return fmt.Errorf("wiki: rebuild: list pages: %w", err)
+// RebuildEdges regenerates the adjacency table from the body wikilinks of the
+// given touched pages (incremental: only pages written this run). It batches
+// all store reads/writes so cost scales with the touched set, not the whole
+// wiki. (Contradictions are persisted separately by
+// service.persistContradictions, pipeline step 4.)
+func (w *Writer) RebuildEdges(ctx context.Context, agentID string, touched []string) error {
+	if len(touched) == 0 {
+		return nil
 	}
+	pages, err := w.deps.Store.GetPagesByIDs(ctx, agentID, touched)
+	if err != nil {
+		return fmt.Errorf("wiki: rebuild: get pages: %w", err)
+	}
+	if len(pages) == 0 {
+		return nil
+	}
+
+	// Collect every wikilink target from the touched pages (deduped).
+	type link struct{ source, target string }
+	var links []link
+	targetSeen := map[string]bool{}
+	var targets []string
 	for _, p := range pages {
-		full, err := w.deps.Store.GetPage(ctx, agentID, p.ID)
-		if err != nil {
-			continue
-		}
-		if full == nil {
-			continue
-		}
-		// Clear stale out-edges, then re-derive from wikilinks.
-		if err := w.deps.Store.DeleteEdgesFor(ctx, agentID, p.ID); err != nil {
-			return fmt.Errorf("wiki: rebuild: delete edges: %w", err)
-		}
-		// Refresh the pending (dead-link) set for this page: clear prior
-		// records so removed links don't linger, then re-record current ones.
-		if err := w.deps.Store.DeletePendingLinksFor(ctx, agentID, p.ID); err != nil {
-			return fmt.Errorf("wiki: rebuild: delete pending links: %w", err)
-		}
-		links := ExtractWikilinks(full.BodyMD)
-		for _, target := range links {
+		for _, target := range ExtractWikilinks(p.BodyMD) {
 			if target == p.ID {
 				continue
 			}
-			existing, err := w.deps.Store.GetPage(ctx, agentID, target)
-			if err != nil || existing == nil {
-				// Dead link: record it so the feedback loop can surface
-				// (pending links) instead of silently dropping it.
-				_ = w.deps.Store.RecordPendingLink(ctx, agentID, p.ID, target)
-				continue
+			links = append(links, link{p.ID, target})
+			if !targetSeen[target] {
+				targetSeen[target] = true
+				targets = append(targets, target)
 			}
-			// Resolved: the target now exists — clear any prior pending record.
-			_ = w.deps.Store.ClearPendingLink(ctx, agentID, p.ID, target)
-			_ = w.deps.Store.AddEdgePair(ctx, agentID, store.Edge{
-				SourceID:  p.ID,
-				TargetID:  target,
-				Kind:      store.EdgeReference,
-				Weight:    1,
-				CreatedAt: time.Now(),
+		}
+	}
+
+	// Batch-resolve target existence in one query (instead of one GetPage per
+	// link).
+	exists := map[string]bool{}
+	if len(targets) > 0 {
+		existing, err := w.deps.Store.GetPagesByIDs(ctx, agentID, targets)
+		if err != nil {
+			return fmt.Errorf("wiki: rebuild: resolve targets: %w", err)
+		}
+		for _, pg := range existing {
+			exists[pg.ID] = true
+		}
+	}
+
+	// Clear stale out-edges and pending-link sets for the touched pages.
+	for _, p := range pages {
+		if err := w.deps.Store.DeleteEdgesFor(ctx, agentID, p.ID); err != nil {
+			return fmt.Errorf("wiki: rebuild: delete edges: %w", err)
+		}
+		if err := w.deps.Store.DeletePendingLinksFor(ctx, agentID, p.ID); err != nil {
+			return fmt.Errorf("wiki: rebuild: delete pending links: %w", err)
+		}
+	}
+
+	// Partition links into resolved (edge) and dead (pending), then write each
+	// group in one batch.
+	var edges []store.Edge
+	dead := map[string][]string{}
+	resolved := map[string][]string{}
+	for _, l := range links {
+		if exists[l.target] {
+			edges = append(edges, store.Edge{
+				SourceID: l.source, TargetID: l.target,
+				Kind: store.EdgeReference, Weight: 1, CreatedAt: timeNow(),
 			})
+			resolved[l.source] = append(resolved[l.source], l.target)
+		} else {
+			dead[l.source] = append(dead[l.source], l.target)
+		}
+	}
+	if err := w.deps.Store.AddEdgePairs(ctx, agentID, edges); err != nil {
+		return fmt.Errorf("wiki: rebuild: add edges: %w", err)
+	}
+	for source, targets := range dead {
+		if err := w.deps.Store.RecordPendingLinks(ctx, agentID, source, targets); err != nil {
+			return fmt.Errorf("wiki: rebuild: record pending: %w", err)
+		}
+	}
+	for source, targets := range resolved {
+		if err := w.deps.Store.ClearPendingLinks(ctx, agentID, source, targets); err != nil {
+			return fmt.Errorf("wiki: rebuild: clear pending: %w", err)
 		}
 	}
 	return nil

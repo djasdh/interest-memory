@@ -148,6 +148,12 @@ func (f *fakeStore) UpsertInterestPoint(_ context.Context, p store.InterestPoint
 func (f *fakeStore) GetPage(_ context.Context, _, _ string) (*store.Page, error) {
 	return f.page, nil
 }
+func (f *fakeStore) ListClaims(_ context.Context, _, _ string) ([]store.Claim, error) {
+	if f.page == nil {
+		return nil, nil
+	}
+	return f.page.Claims, nil
+}
 func (f *fakeStore) ResolveReplacement(context.Context, string, string) (*store.Replacement, error) {
 	return nil, nil
 }
@@ -698,6 +704,16 @@ func (f *fakeSubStore) GetPage(_ context.Context, _, id string) (*store.Page, er
 		return f.replPage, nil
 	}
 	return f.page, nil
+}
+func (f *fakeSubStore) ListClaims(_ context.Context, _, id string) ([]store.Claim, error) {
+	pg := f.page
+	if f.replPage != nil && id == f.replPage.ID {
+		pg = f.replPage
+	}
+	if pg == nil {
+		return nil, nil
+	}
+	return pg.Claims, nil
 }
 func (f *fakeSubStore) ResolveReplacement(context.Context, string, string) (*store.Replacement, error) {
 	if f.replPage != nil {

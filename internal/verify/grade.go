@@ -84,11 +84,15 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 		return "", 0, "", "", time.Time{}, true
 	}
 	// Page-level grading: derive from the strongest claim, if any.
-	if len(pg.Claims) == 0 {
+	claims, err := s.store.ListClaims(ctx, agentID, h.ID)
+	if err != nil {
+		claims = nil
+	}
+	if len(claims) == 0 {
 		return pg.Title, 0, "unknown", "unknown", pg.EventTime, false
 	}
-	best := pg.Claims[0]
-	for _, c := range pg.Claims {
+	best := claims[0]
+	for _, c := range claims {
 		if c.Confidence > best.Confidence {
 			best = c
 		}

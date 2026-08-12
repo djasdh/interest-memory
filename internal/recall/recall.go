@@ -27,7 +27,13 @@ type VectorIndex interface {
 // Store loads hit entities for injection (implemented by *store.SQLiteStore).
 type Store interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error)
+	// GetInterestPointsByIDs fetches interest points by id in one query.
+	GetInterestPointsByIDs(ctx context.Context, agentID string, ids []string) ([]store.InterestPoint, error)
 	GetPage(ctx context.Context, agentID, id string) (*store.Page, error)
+	// GetPagesByIDs fetches pages by id in one query.
+	GetPagesByIDs(ctx context.Context, agentID string, ids []string) ([]store.Page, error)
+	// ListClaims fetches a page's claims (GetPage no longer loads them).
+	ListClaims(ctx context.Context, agentID, pageID string) ([]store.Claim, error)
 	Outlinks(ctx context.Context, agentID, sourceID string) ([]store.Edge, error)
 	Backlinks(ctx context.Context, agentID, targetID string) ([]store.Edge, error)
 	// ResolveReplacement returns the live successor of an archived/superseded
@@ -281,6 +287,13 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 		}
 	}
 
+	// Preload event times in one batch when temporal filtering is active
+	// (avoids one GetInterestPoint/GetPage per hit).
+	var eventTimes map[string]time.Time
+	if after != nil || before != nil {
+		eventTimes = s.eventTimes(ctx, agentID, hits)
+	}
+
 	// Apply min-score threshold, (optionally) drop wiki pages, and filter by
 	// event time.
 	filtered := hits[:0]
@@ -292,7 +305,7 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 			continue
 		}
 		if after != nil || before != nil {
-			et := s.eventTimeOf(ctx, agentID, h)
+			et := eventTimes[h.ID]
 			if after != nil && (et.IsZero() || et.Before(*after)) {
 				continue
 			}
@@ -308,17 +321,35 @@ func (s *service) retrieve(ctx context.Context, agentID, query string, opts Opti
 	return filtered, nil
 }
 
-// eventTimeOf resolves an entity's EventTime for temporal filtering.
-func (s *service) eventTimeOf(ctx context.Context, agentID string, h vec.Hit) time.Time {
-	if h.Kind == "interest_point" {
-		if p, err := s.store.GetInterestPoint(ctx, agentID, h.ID); err == nil && p != nil {
-			return p.EventTime
+// eventTimes resolves EventTime for a batch of hits in two queries (interest
+// points first; pages fill in any id not already resolved).
+func (s *service) eventTimes(ctx context.Context, agentID string, hits []vec.Hit) map[string]time.Time {
+	out := make(map[string]time.Time, len(hits))
+	var ipIDs, pgIDs []string
+	for _, h := range hits {
+		if h.Kind == "interest_point" {
+			ipIDs = append(ipIDs, h.ID)
+		} else {
+			pgIDs = append(pgIDs, h.ID)
 		}
 	}
-	if pg, err := s.store.GetPage(ctx, agentID, h.ID); err == nil && pg != nil {
-		return pg.EventTime
+	if len(ipIDs) > 0 {
+		if ips, err := s.store.GetInterestPointsByIDs(ctx, agentID, ipIDs); err == nil {
+			for _, p := range ips {
+				out[p.ID] = p.EventTime
+			}
+		}
 	}
-	return time.Time{}
+	if len(pgIDs) > 0 {
+		if pgs, err := s.store.GetPagesByIDs(ctx, agentID, pgIDs); err == nil {
+			for _, p := range pgs {
+				if _, ok := out[p.ID]; !ok {
+					out[p.ID] = p.EventTime
+				}
+			}
+		}
+	}
+	return out
 }
 
 func (s *service) vecSearch(ctx context.Context, agentID, query string, topK int) ([]vec.Hit, error) {
@@ -536,7 +567,7 @@ func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen 
 			Title:     pg.Title,
 			BodyMD:    truncate(pg.BodyMD, maxBodyLen),
 			Status:    pg.Status,
-			Claims:    pg.Claims,
+			Claims:    s.pageClaims(ctx, agentID, pg.ID),
 			Freshness: store.Freshness{Level: "unknown"},
 		}
 		s.attachEdges(ctx, agentID, id, r)
@@ -583,7 +614,7 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 				Title:     pg.Title,
 				BodyMD:    truncate(pg.BodyMD, maxBodyLen),
 				Status:    pg.Status,
-				Claims:    pg.Claims,
+				Claims:    s.pageClaims(ctx, agentID, pg.ID),
 				Freshness: store.Freshness{Level: "unknown"},
 			}
 			s.attachEdges(ctx, agentID, h.ID, r)
@@ -602,18 +633,49 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 }
 
 // attachEdges fills Outlinks/Backlinks, resolving the far-end title (page
-// Title or interest point Name) for each edge.
+// Title or interest point Name) for each edge in batch rather than per edge.
 func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result) {
-	if outs, err := s.store.Outlinks(ctx, agentID, id); err == nil {
-		for _, e := range outs {
-			r.Outlinks = append(r.Outlinks, s.edgeRef(ctx, agentID, e, e.TargetID))
+	outs, _ := s.store.Outlinks(ctx, agentID, id)
+	ins, _ := s.store.Backlinks(ctx, agentID, id)
+
+	// Collect every far-end id and resolve its title in two batch queries.
+	farIDs := make([]string, 0, len(outs)+len(ins))
+	for _, e := range outs {
+		farIDs = append(farIDs, e.TargetID)
+	}
+	for _, e := range ins {
+		farIDs = append(farIDs, e.SourceID)
+	}
+	titles := s.resolveTitles(ctx, agentID, farIDs)
+
+	for _, e := range outs {
+		r.Outlinks = append(r.Outlinks, EdgeRef{ID: e.TargetID, Title: titles[e.TargetID], Kind: e.Kind, Weight: e.Weight})
+	}
+	for _, e := range ins {
+		r.Backlinks = append(r.Backlinks, EdgeRef{ID: e.SourceID, Title: titles[e.SourceID], Kind: e.Kind, Weight: e.Weight})
+	}
+}
+
+// resolveTitles maps entity ids to their display titles in one batch (interest
+// points win over pages on an id collision).
+func (s *service) resolveTitles(ctx context.Context, agentID string, ids []string) map[string]string {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	if ips, err := s.store.GetInterestPointsByIDs(ctx, agentID, ids); err == nil {
+		for _, p := range ips {
+			out[p.ID] = p.Name
 		}
 	}
-	if ins, err := s.store.Backlinks(ctx, agentID, id); err == nil {
-		for _, e := range ins {
-			r.Backlinks = append(r.Backlinks, s.edgeRef(ctx, agentID, e, e.SourceID))
+	if pgs, err := s.store.GetPagesByIDs(ctx, agentID, ids); err == nil {
+		for _, p := range pgs {
+			if _, ok := out[p.ID]; !ok {
+				out[p.ID] = p.Title
+			}
 		}
 	}
+	return out
 }
 
 // attachReplacement resolves and attaches the live successor of an
@@ -634,17 +696,13 @@ func (s *service) attachReplacement(ctx context.Context, agentID, id string, r *
 	}
 }
 
-// edgeRef resolves the far-end id's title for an edge.
-func (s *service) edgeRef(ctx context.Context, agentID string, e store.Edge, farID string) EdgeRef {
-	ref := EdgeRef{ID: farID, Kind: e.Kind, Weight: e.Weight}
-	if p, err := s.store.GetInterestPoint(ctx, agentID, farID); err == nil && p != nil {
-		ref.Title = p.Name
-		return ref
+// pageClaims loads a page's claims for result assembly (best-effort; empty on
+// any error, since GetPage no longer eager-loads them).
+func (s *service) pageClaims(ctx context.Context, agentID, id string) []store.Claim {
+	if claims, err := s.store.ListClaims(ctx, agentID, id); err == nil {
+		return claims
 	}
-	if pg, err := s.store.GetPage(ctx, agentID, farID); err == nil && pg != nil {
-		ref.Title = pg.Title
-	}
-	return ref
+	return nil
 }
 
 func truncate(s string, n int) string {

@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,9 @@ func (f *fakeProviderFactory) get(context.Context) (*provider.Provider, error) {
 }
 
 // fakeRunner records loop invocations and can emit a wiki_write event.
+// Compile runs loops concurrently, so counters are mutex-guarded.
 type fakeRunner struct {
+	mu    sync.Mutex
 	calls int
 	// prompts captures the prompt text of each loop.
 	prompts []string
@@ -33,6 +36,8 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) run(ctx context.Context, _ *provider.Provider, _ string, _ []types.Tool, prompt types.Message, emit types.EventSink) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.prompts = append(f.prompts, prompt.Text)
 	for _, id := range f.ids {

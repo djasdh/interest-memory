@@ -5,11 +5,18 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/store"
 )
+
+// maxJobs caps the in-memory job table. Enqueue evicts the oldest terminal
+// (done/failed) jobs past this bound so a long-running process doesn't leak
+// memory. Recent/terminal jobs stay queryable until capacity pressure evicts
+// them.
+const maxJobs = 1000
 
 // Status of a job.
 type Status string
@@ -90,10 +97,33 @@ func (w *Worker) Enqueue(ctx context.Context, agentID, sessionID string) (string
 	}
 	w.mu.Lock()
 	w.jobs[jobID] = j
+	if len(w.jobs) > maxJobs {
+		w.pruneLocked()
+	}
 	w.mu.Unlock()
 
 	w.enqueueItem(jobItem{jobID: jobID, agentID: agentID, session: sessionID})
 	return jobID, nil
+}
+
+// pruneLocked evicts the oldest terminal jobs until the table is back within
+// maxJobs. Caller must hold w.mu. Running jobs are never evicted.
+func (w *Worker) pruneLocked() {
+	type term struct {
+		id string
+		at time.Time
+	}
+	var terms []term
+	for id, j := range w.jobs {
+		if (j.Status == StatusDone || j.Status == StatusFailed) && j.DoneAt != nil {
+			terms = append(terms, term{id: id, at: *j.DoneAt})
+		}
+	}
+	sort.Slice(terms, func(i, k int) bool { return terms[i].at.Before(terms[k].at) })
+	excess := len(w.jobs) - maxJobs
+	for i := 0; i < excess && i < len(terms); i++ {
+		delete(w.jobs, terms[i].id)
+	}
 }
 
 func (w *Worker) enqueueItem(it jobItem) {

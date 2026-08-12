@@ -9,12 +9,17 @@ type Store interface {
 	// ---- interest points ----
 	UpsertInterestPoint(ctx context.Context, p InterestPoint) error
 	GetInterestPoint(ctx context.Context, agentID, id string) (*InterestPoint, error)
+	// GetInterestPointsByIDs fetches interest points by id in one query.
+	GetInterestPointsByIDs(ctx context.Context, agentID string, ids []string) ([]InterestPoint, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]InterestPoint, error)
 	SearchInterestPointsByKeywords(ctx context.Context, agentID, query string, limit int) ([]InterestPoint, error)
 
 	// ---- wiki pages ----
 	UpsertPage(ctx context.Context, p Page) error
 	GetPage(ctx context.Context, agentID, id string) (*Page, error)
+	// GetPagesByIDs fetches pages by id in one query (no claims, order
+	// unspecified, missing ids skipped). Batch counterpart to GetPage.
+	GetPagesByIDs(ctx context.Context, agentID string, ids []string) ([]Page, error)
 	ListPages(ctx context.Context, agentID string, pageType PageType) ([]Page, error)
 	SearchPagesByKeywords(ctx context.Context, agentID, query string, limit int) ([]Page, error)
 	// ListTags aggregates page tags for the agent (tag taxonomy), count desc.
@@ -25,6 +30,8 @@ type Store interface {
 	// AddEdgePair adds the edge and (for EdgeContradict) the reverse pair,
 	// enforcing the EnsureContradictPair invariant.
 	AddEdgePair(ctx context.Context, agentID string, e Edge) error
+	// AddEdgePairs writes many edges in one transaction (same invariant).
+	AddEdgePairs(ctx context.Context, agentID string, edges []Edge) error
 	Outlinks(ctx context.Context, agentID, sourceID string) ([]Edge, error)
 	Backlinks(ctx context.Context, agentID, targetID string) ([]Edge, error)
 	DeleteEdgesFor(ctx context.Context, agentID, sourceID string) error
@@ -38,9 +45,13 @@ type Store interface {
 	// matching page yet (dead link). Upsert semantics: repeated calls for the
 	// same pair update the timestamp, not duplicate.
 	RecordPendingLink(ctx context.Context, agentID, sourceID, target string) error
+	// RecordPendingLinks batch-records dead links for one source page.
+	RecordPendingLinks(ctx context.Context, agentID, sourceID string, targets []string) error
 	// ClearPendingLink removes a resolved pending link (its target page now
 	// exists). No-op when absent.
 	ClearPendingLink(ctx context.Context, agentID, sourceID, target string) error
+	// ClearPendingLinks batch-removes resolved pending links for one source page.
+	ClearPendingLinks(ctx context.Context, agentID, sourceID string, targets []string) error
 	// DeletePendingLinksFor removes all pending links for a source page
 	// (used by RebuildEdges to refresh the dead-link set from current body).
 	DeletePendingLinksFor(ctx context.Context, agentID, sourceID string) error
@@ -49,6 +60,8 @@ type Store interface {
 	// ---- claims ----
 	UpsertClaim(ctx context.Context, c Claim) error
 	ListClaims(ctx context.Context, agentID, pageID string) ([]Claim, error)
+	// ListClaimsForPageIDs fetches claims for many pages in one query.
+	ListClaimsForPageIDs(ctx context.Context, agentID string, pageIDs []string) ([]Claim, error)
 
 	// ---- contradictions ----
 	UpsertContradiction(ctx context.Context, c Contradiction) error
@@ -73,6 +86,11 @@ type Store interface {
 	// (interest points or wiki pages). Used for the "all" namespace-sharing
 	// mode to discover the full namespace set dynamically.
 	ListAgentIDs(ctx context.Context) ([]string, error)
+
+	// ---- stats (counts only, no full-row scans) ----
+	CountInterestPoints(ctx context.Context, agentID string) (int, error)
+	CountPages(ctx context.Context, agentID string) (int, error)
+	CountContradictions(ctx context.Context, agentID string) (int, error)
 
 	Close() error
 }

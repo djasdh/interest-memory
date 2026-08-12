@@ -341,7 +341,7 @@ func (f *fakeWiki) Compile(_ context.Context, _ string, pts []store.InterestPoin
 	f.compiled = pts
 	return f.touched, nil
 }
-func (f *fakeWiki) RebuildEdges(context.Context, string) error { return nil }
+func (f *fakeWiki) RebuildEdges(context.Context, string, []string) error { return nil }
 func (f *fakeWiki) ReconcileRelated(_ context.Context, _ string, in wiki.ReconcileInput, _, _ int) error {
 	f.reconciles = append(f.reconciles, in)
 	return nil

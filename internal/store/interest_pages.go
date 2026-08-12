@@ -93,6 +93,38 @@ func (s *SQLiteStore) ListInterestPoints(ctx context.Context, agentID string) ([
 	return out, rows.Err()
 }
 
+// GetInterestPointsByIDs returns interest points for the given ids in one
+// query. Missing ids are silently skipped; result order is unspecified.
+func (s *SQLiteStore) GetInterestPointsByIDs(ctx context.Context, agentID string, ids []string) ([]InterestPoint, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, agentID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, agent_id, name, summary, keywords, importance, status, subjective,
+			turn_range_start, turn_range_end, event_time,
+			confidence, reliability_status, evidence, freshness_level, updated_at,
+			ttl_days, first_seen_at, last_seen_at, seen_count, source_session_ids, wiki_worthy
+		FROM interest_points WHERE agent_id = ? AND id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: get interest points by ids: %w", err)
+	}
+	defer rows.Close()
+	var out []InterestPoint
+	for rows.Next() {
+		p, err := scanInterestPoint(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteStore) SearchInterestPointsByKeywords(ctx context.Context, agentID, query string, limit int) ([]InterestPoint, error) {
 	if query == "" || limit <= 0 {
 		return nil, nil
@@ -185,6 +217,10 @@ func (s *SQLiteStore) UpsertPage(ctx context.Context, p Page) error {
 	return nil
 }
 
+// GetPage returns a single page WITHOUT its claims. Callers that need claims
+// must fetch them explicitly via ListClaims (or ListClaimsForPageIDs for
+// batches) — most readers (edge rebuild, wikilink resolution) only need the
+// body/title, and eager claim loading made every page read an N+1.
 func (s *SQLiteStore) GetPage(ctx context.Context, agentID, id string) (*Page, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
@@ -204,9 +240,43 @@ func (s *SQLiteStore) GetPage(ctx context.Context, agentID, id string) (*Page, e
 	if evt.Valid {
 		p.EventTime = evt.Time
 	}
-	claims, _ := s.ListClaims(ctx, agentID, p.ID)
-	p.Claims = claims
 	return &p, nil
+}
+
+// GetPagesByIDs returns pages for the given ids in one query (no claims).
+// Missing ids are silently skipped; result order is unspecified.
+func (s *SQLiteStore) GetPagesByIDs(ctx context.Context, agentID string, ids []string) ([]Page, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, agentID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, agent_id, page_type, title, body_md, status, tags, sources, event_time, created_at, updated_at
+		FROM wiki_pages WHERE agent_id = ? AND id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: get pages by ids: %w", err)
+	}
+	defer rows.Close()
+	var out []Page
+	for rows.Next() {
+		var p Page
+		var tags, sources string
+		var evt sql.NullTime
+		if err := rows.Scan(&p.ID, &p.AgentID, &p.PageType, &p.Title, &p.BodyMD, &p.Status, &tags, &sources, &evt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		unmarshalJSON(tags, &p.Tags)
+		unmarshalJSON(sources, &p.Sources)
+		if evt.Valid {
+			p.EventTime = evt.Time
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType PageType) ([]Page, error) {
@@ -243,13 +313,24 @@ func (s *SQLiteStore) ListPages(ctx context.Context, agentID string, pageType Pa
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// The store uses a single SQLite connection (SetMaxOpenConns(1)); the
-	// scan rows above must be fully closed before issuing per-page claim
-	// queries, otherwise the new query blocks forever waiting for the conn.
+	// Claims are batch-filled in one query (instead of one per page). The rows
+	// must be closed first: on a single connection the claim query would
+	// otherwise block on the still-open scan.
 	rows.Close()
-	for i := range out {
-		claims, _ := s.ListClaims(ctx, agentID, out[i].ID)
-		out[i].Claims = claims
+	if len(out) > 0 {
+		ids := make([]string, len(out))
+		for i := range out {
+			ids[i] = out[i].ID
+		}
+		if claims, err := s.ListClaimsForPageIDs(ctx, agentID, ids); err == nil {
+			byPage := make(map[string][]Claim, len(out))
+			for _, c := range claims {
+				byPage[c.PageID] = append(byPage[c.PageID], c)
+			}
+			for i := range out {
+				out[i].Claims = byPage[out[i].ID]
+			}
+		}
 	}
 	return out, nil
 }
@@ -332,6 +413,39 @@ func (s *SQLiteStore) ListClaims(ctx context.Context, agentID, pageID string) ([
 	return out, rows.Err()
 }
 
+// ListClaimsForPageIDs fetches claims for many pages in one query (no
+// per-page round trips). Result order is unspecified; callers group by
+// Claim.PageID.
+func (s *SQLiteStore) ListClaimsForPageIDs(ctx context.Context, agentID string, pageIDs []string) ([]Claim, error) {
+	if len(pageIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(pageIDs)+1)
+	args = append(args, agentID)
+	for _, id := range pageIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, page_id, text, status, confidence, evidence, freshness_level, updated_at, ttl_days
+		FROM claims WHERE agent_id = ? AND page_id IN (`+placeholders(len(pageIDs))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list claims for pages: %w", err)
+	}
+	defer rows.Close()
+	var out []Claim
+	for rows.Next() {
+		var c Claim
+		var ev string
+		if err := rows.Scan(&c.ID, &c.PageID, &c.Text, &c.Status, &c.Confidence, &ev,
+			&c.Freshness.Level, &c.Freshness.UpdatedAt, &c.Freshness.TTLDays); err != nil {
+			return nil, err
+		}
+		unmarshalJSON(ev, &c.Evidence)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ── contradictions ─────────────────────────────────────────────────────────
 
 func (s *SQLiteStore) UpsertContradiction(ctx context.Context, c Contradiction) error {
@@ -367,6 +481,40 @@ func (s *SQLiteStore) ListContradictions(ctx context.Context, agentID string) ([
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// CountInterestPoints returns the number of interest points for an agent
+// without materializing rows (used by the stats endpoint).
+func (s *SQLiteStore) CountInterestPoints(ctx context.Context, agentID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM interest_points WHERE agent_id = ?`, agentID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count interest points: %w", err)
+	}
+	return n, nil
+}
+
+// CountPages returns the number of wiki pages for an agent.
+func (s *SQLiteStore) CountPages(ctx context.Context, agentID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM wiki_pages WHERE agent_id = ?`, agentID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count pages: %w", err)
+	}
+	return n, nil
+}
+
+// CountContradictions returns the number of contradictions for an agent.
+func (s *SQLiteStore) CountContradictions(ctx context.Context, agentID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM contradictions WHERE agent_id = ?`, agentID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count contradictions: %w", err)
+	}
+	return n, nil
 }
 
 // ── transcripts ───────────────────────────────────────────────────────────

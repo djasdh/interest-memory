@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,14 +27,31 @@ type SQLiteStore struct {
 	writeMu sync.Mutex // guards agentMu map
 }
 
+// maxOpenConns is the connection-pool size for file-backed databases. WAL
+// mode permits many concurrent readers plus a single writer; the SQLite
+// engine itself serializes writes (with busy_timeout as the wait), so the
+// pool needs a handful of connections for read concurrency rather than one.
+const maxOpenConns = 4
+
 // Open opens (creating if needed) the SQLite database at path and applies
 // schema migrations.
+//
+// File-backed databases open in WAL journal mode so concurrent readers never
+// block the writer (and vice versa). ":memory:" keeps a single connection:
+// it is a private per-connection database, so a pool would yield unrelated
+// empty databases.
 func Open(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite3", path)
+	dsn := path
+	maxConns := 1
+	if path != ":memory:" && !strings.HasPrefix(path, "file:") {
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
+		maxConns = maxOpenConns
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
-	db.SetMaxOpenConns(1) // SQLite single-writer; serialize via one conn
+	db.SetMaxOpenConns(maxConns)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: ping %s: %w", path, err)
@@ -232,6 +250,14 @@ func (s *SQLiteStore) ListAgentIDs(ctx context.Context) ([]string, error) {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+// placeholders returns a comma-separated list of "?" SQL placeholders.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
 
 func marshalJSON(v any) string {
 	b, err := json.Marshal(v)

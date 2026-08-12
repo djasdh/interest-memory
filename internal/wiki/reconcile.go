@@ -243,7 +243,8 @@ func describeArchived(a ArchivedInfo) string {
 // collectRelated BFS-walks the adjacency graph (outlinks/backlinks/has_page)
 // from the seed ids up to maxHops deep, returning the related pages. Interest
 // point ids (e.g. archived points) resolve to their concept pages via
-// has_page edges.
+// has_page edges. Page existence is resolved in one batch per hop instead of
+// one GetPage per node.
 func (w *Writer) collectRelated(ctx context.Context, agentID string, seeds []string, maxHops int) ([]store.Page, error) {
 	if maxHops <= 0 {
 		maxHops = 3
@@ -254,40 +255,56 @@ func (w *Writer) collectRelated(ctx context.Context, agentID string, seeds []str
 	// hop 0 = seeds themselves; each further hop walks one more level of the
 	// graph. maxHops is the propagation depth (≤3 by default).
 	for hop := 0; hop <= maxHops && len(queue) > 0; hop++ {
-		var next []string
+		// Dedupe the queue (unvisited only) and mark visited up front.
+		ids := make([]string, 0, len(queue))
 		for _, id := range queue {
-			if visited[id] {
+			if id == "" || visited[id] {
 				continue
 			}
 			visited[id] = true
-			p, err := w.deps.Store.GetPage(ctx, agentID, id)
+			ids = append(ids, id)
+		}
+
+		// Batch-resolve which ids are pages (vs interest points).
+		pageByID := map[string]*store.Page{}
+		if len(ids) > 0 {
+			batch, err := w.deps.Store.GetPagesByIDs(ctx, agentID, ids)
 			if err != nil {
-				continue
+				return nil, err
 			}
-			if p == nil {
-				// Likely an interest point id — resolve concept pages via has_page.
-				outs, err := w.deps.Store.Outlinks(ctx, agentID, id)
-				if err != nil {
-					continue
+			for i := range batch {
+				pageByID[batch[i].ID] = &batch[i]
+			}
+		}
+
+		var next []string
+		for _, id := range ids {
+			if p, ok := pageByID[id]; ok {
+				pages = append(pages, *p)
+				if outs, err := w.deps.Store.Outlinks(ctx, agentID, id); err == nil {
+					for _, e := range outs {
+						if !visited[e.TargetID] {
+							next = append(next, e.TargetID)
+						}
+					}
 				}
-				for _, e := range outs {
-					if e.Kind == store.EdgeHasPage && !visited[e.TargetID] {
-						next = append(next, e.TargetID)
+				if ins, err := w.deps.Store.Backlinks(ctx, agentID, id); err == nil {
+					for _, e := range ins {
+						if !visited[e.SourceID] {
+							next = append(next, e.SourceID)
+						}
 					}
 				}
 				continue
 			}
-			pages = append(pages, *p)
-			outs, _ := w.deps.Store.Outlinks(ctx, agentID, id)
-			for _, e := range outs {
-				if !visited[e.TargetID] {
-					next = append(next, e.TargetID)
-				}
+			// Likely an interest point id — resolve concept pages via has_page.
+			outs, err := w.deps.Store.Outlinks(ctx, agentID, id)
+			if err != nil {
+				continue
 			}
-			ins, _ := w.deps.Store.Backlinks(ctx, agentID, id)
-			for _, e := range ins {
-				if !visited[e.SourceID] {
-					next = append(next, e.SourceID)
+			for _, e := range outs {
+				if e.Kind == store.EdgeHasPage && !visited[e.TargetID] {
+					next = append(next, e.TargetID)
 				}
 			}
 		}

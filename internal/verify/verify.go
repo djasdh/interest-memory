@@ -42,6 +42,8 @@ type PointStore interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error)
 	UpsertInterestPoint(ctx context.Context, p store.InterestPoint) error
 	GetPage(ctx context.Context, agentID, id string) (*store.Page, error)
+	// ListClaims fetches a page's claims (GetPage no longer loads them).
+	ListClaims(ctx context.Context, agentID, pageID string) ([]store.Claim, error)
 	// ResolveReplacement returns the live successor of an archived/superseded
 	// entity (or nil) so grading can silently substitute it.
 	ResolveReplacement(ctx context.Context, agentID, id string) (*store.Replacement, error)
@@ -69,6 +71,9 @@ type Verified struct {
 	RelationReason string
 	Reliability    store.Reliability
 	Freshness      store.Freshness
+	// Vec is the candidate's embedding, computed once in VerifyCandidates and
+	// reused by interest.Clean (avoids re-embedding the same text twice).
+	Vec []float32
 }
 
 // Graded is a recall hit annotated for injection (verify#3).

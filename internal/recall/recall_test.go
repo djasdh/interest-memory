@@ -41,9 +41,33 @@ func (f *fakeStore) GetInterestPoint(_ context.Context, _, id string) (*store.In
 	}
 	return nil, nil
 }
+func (f *fakeStore) GetInterestPointsByIDs(_ context.Context, _ string, ids []string) ([]store.InterestPoint, error) {
+	var out []store.InterestPoint
+	for _, id := range ids {
+		if p, ok := f.ips[id]; ok && p != nil {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
 func (f *fakeStore) GetPage(_ context.Context, _, id string) (*store.Page, error) {
 	if p, ok := f.pgs[id]; ok {
 		return p, nil
+	}
+	return nil, nil
+}
+func (f *fakeStore) GetPagesByIDs(_ context.Context, _ string, ids []string) ([]store.Page, error) {
+	var out []store.Page
+	for _, id := range ids {
+		if p, ok := f.pgs[id]; ok && p != nil {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) ListClaims(_ context.Context, _, id string) ([]store.Claim, error) {
+	if p, ok := f.pgs[id]; ok && p != nil {
+		return p.Claims, nil
 	}
 	return nil, nil
 }
@@ -596,8 +620,17 @@ func (m *agentStore) fs(agent string) *fakeStore {
 func (m *agentStore) GetInterestPoint(ctx context.Context, agent, id string) (*store.InterestPoint, error) {
 	return m.fs(agent).GetInterestPoint(ctx, agent, id)
 }
+func (m *agentStore) GetInterestPointsByIDs(ctx context.Context, agent string, ids []string) ([]store.InterestPoint, error) {
+	return m.fs(agent).GetInterestPointsByIDs(ctx, agent, ids)
+}
 func (m *agentStore) GetPage(ctx context.Context, agent, id string) (*store.Page, error) {
 	return m.fs(agent).GetPage(ctx, agent, id)
+}
+func (m *agentStore) GetPagesByIDs(ctx context.Context, agent string, ids []string) ([]store.Page, error) {
+	return m.fs(agent).GetPagesByIDs(ctx, agent, ids)
+}
+func (m *agentStore) ListClaims(ctx context.Context, agent, id string) ([]store.Claim, error) {
+	return m.fs(agent).ListClaims(ctx, agent, id)
 }
 func (m *agentStore) Outlinks(ctx context.Context, agent, id string) ([]store.Edge, error) {
 	return m.fs(agent).Outlinks(ctx, agent, id)

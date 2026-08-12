@@ -35,6 +35,22 @@ type verifyResult struct {
 // contested/unknown still pass through — the status drives later grading,
 // not a hard reject.
 func (s *service) VerifyCandidates(ctx context.Context, agentID string, cands []fork.Candidate) ([]Verified, error) {
+	// Embed every candidate once (batched) so findSimilar and interest.Clean
+	// share the same vectors instead of re-embedding the same text.
+	texts := make([]string, len(cands))
+	for i, c := range cands {
+		texts[i] = c.Topic
+		if c.Reason != "" {
+			texts[i] += "\n" + c.Reason
+		}
+	}
+	vecs := make([][]float32, len(cands))
+	if s.embed != nil {
+		if got, err := s.embed.EmbedBatch(ctx, texts); err == nil {
+			copy(vecs, got)
+		}
+	}
+
 	out := make([]Verified, len(cands))
 	sem := make(chan struct{}, s.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
@@ -44,12 +60,13 @@ func (s *service) VerifyCandidates(ctx context.Context, agentID string, cands []
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			v, err := s.verifyOne(ctx, agentID, c)
+			v, err := s.verifyOne(ctx, agentID, c, vecs[i])
 			if err != nil {
 				// A fact-check failure must not block the pipeline: fall back
 				// to an unknown-status verdict with the candidate's own data.
 				v = degradedVerifier(c)
 			}
+			v.Vec = vecs[i]
 			out[i] = v
 		}(i, c)
 	}
@@ -57,8 +74,8 @@ func (s *service) VerifyCandidates(ctx context.Context, agentID string, cands []
 	return out, nil
 }
 
-func (s *service) verifyOne(ctx context.Context, agentID string, c fork.Candidate) (Verified, error) {
-	hist := s.findSimilar(ctx, agentID, c)
+func (s *service) verifyOne(ctx context.Context, agentID string, c fork.Candidate, vec []float32) (Verified, error) {
+	hist := s.findSimilar(ctx, agentID, c, vec)
 	evidence, query := s.gatherEvidence(ctx, c)
 	prompt := buildVerifyPrompt(c, evidence, hist, s.cfg.Language)
 	var vr verifyResult
@@ -114,16 +131,8 @@ func (s *service) verifyOne(ctx context.Context, agentID string, c fork.Candidat
 // findSimilar recalls the most similar historical interest point for the
 // candidate. Returns nil when vec/embed are unavailable, retrieval fails, or
 // no interest-point hit clears the similarity bar (0.6).
-func (s *service) findSimilar(ctx context.Context, agentID string, c fork.Candidate) *store.InterestPoint {
-	if s.embed == nil || s.vec == nil {
-		return nil
-	}
-	text := c.Topic
-	if c.Reason != "" {
-		text += "\n" + c.Reason
-	}
-	q, err := s.embed.Embed(ctx, text)
-	if err != nil {
+func (s *service) findSimilar(ctx context.Context, agentID string, c fork.Candidate, q []float32) *store.InterestPoint {
+	if s.vec == nil || q == nil {
 		return nil
 	}
 	hits, err := s.vec.Search(ctx, agentID, q, 10)

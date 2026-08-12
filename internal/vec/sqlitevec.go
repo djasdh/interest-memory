@@ -123,6 +123,7 @@ func (v *SQLiteVec) Search(ctx context.Context, agentID string, q []float32, top
 	if topK <= 0 {
 		topK = 8
 	}
+	qb := encodeFloat32s(q) // normalize once, reuse across both kinds
 	var out []Hit
 	for _, kind := range []string{"interest_point", "wiki_page"} {
 		if err := v.ensureTable(ctx, kind); err != nil {
@@ -132,7 +133,7 @@ func (v *SQLiteVec) Search(ctx context.Context, agentID string, q []float32, top
 		rows, err := v.db.QueryContext(ctx, fmt.Sprintf(
 			`SELECT id, agent_id, distance FROM %s
 			 WHERE agent_id = ? AND embedding MATCH ? ORDER BY distance LIMIT ?`,
-			name), agentID, encodeFloat32s(q), topK)
+			name), agentID, qb, topK)
 		if err != nil {
 			continue // table empty or error — skip kind
 		}

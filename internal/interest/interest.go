@@ -91,13 +91,19 @@ func (c *cleaner) Clean(ctx context.Context, agentID string, verified []verify.V
 }
 
 func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified) (*store.InterestPoint, string, error) {
-	text := v.Candidate.Topic
-	if v.Candidate.Reason != "" {
-		text += "\n" + v.Candidate.Reason
-	}
-	vecV, err := c.embedder.Embed(ctx, text)
-	if err != nil {
-		return nil, "", err
+	vecV := v.Vec
+	if vecV == nil {
+		// Fallback: verify didn't embed this candidate (embedding was
+		// unavailable then) — embed it here so cleaning can still dedupe.
+		text := v.Candidate.Topic
+		if v.Candidate.Reason != "" {
+			text += "\n" + v.Candidate.Reason
+		}
+		var err error
+		vecV, err = c.embedder.Embed(ctx, text)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	hits, err := c.vec.Search(ctx, agentID, vecV, c.topK)

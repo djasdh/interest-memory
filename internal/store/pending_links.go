@@ -10,17 +10,27 @@ import (
 // does not exist yet (dead link). Upsert semantics: repeated calls update
 // the timestamp instead of duplicating.
 func (s *SQLiteStore) RecordPendingLink(ctx context.Context, agentID, sourceID, target string) error {
+	return s.RecordPendingLinks(ctx, agentID, sourceID, []string{target})
+}
+
+// RecordPendingLinks batch-records dead links for one source page.
+func (s *SQLiteStore) RecordPendingLinks(ctx context.Context, agentID, sourceID string, targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
 	lock := s.agentLock(agentID)
 	lock.Lock()
 	defer lock.Unlock()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO pending_links (agent_id, source_id, target, created_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(agent_id, source_id, target) DO UPDATE SET
-			created_at = excluded.created_at`,
-		agentID, sourceID, target, time.Now())
-	if err != nil {
-		return fmt.Errorf("store: record pending link: %w", err)
+	now := time.Now()
+	for _, target := range targets {
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO pending_links (agent_id, source_id, target, created_at)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(agent_id, source_id, target) DO UPDATE SET
+				created_at = excluded.created_at`,
+			agentID, sourceID, target, now); err != nil {
+			return fmt.Errorf("store: record pending link: %w", err)
+		}
 	}
 	return nil
 }
@@ -28,15 +38,24 @@ func (s *SQLiteStore) RecordPendingLink(ctx context.Context, agentID, sourceID, 
 // ClearPendingLink removes a resolved pending link (its target page now
 // exists). No-op when absent.
 func (s *SQLiteStore) ClearPendingLink(ctx context.Context, agentID, sourceID, target string) error {
+	return s.ClearPendingLinks(ctx, agentID, sourceID, []string{target})
+}
+
+// ClearPendingLinks batch-removes resolved pending links for one source page.
+func (s *SQLiteStore) ClearPendingLinks(ctx context.Context, agentID, sourceID string, targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
 	lock := s.agentLock(agentID)
 	lock.Lock()
 	defer lock.Unlock()
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM pending_links
-		WHERE agent_id = ? AND source_id = ? AND target = ?`,
-		agentID, sourceID, target)
-	if err != nil {
-		return fmt.Errorf("store: clear pending link: %w", err)
+	for _, target := range targets {
+		if _, err := s.db.ExecContext(ctx, `
+			DELETE FROM pending_links
+			WHERE agent_id = ? AND source_id = ? AND target = ?`,
+			agentID, sourceID, target); err != nil {
+			return fmt.Errorf("store: clear pending link: %w", err)
+		}
 	}
 	return nil
 }

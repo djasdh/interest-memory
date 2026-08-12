@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -29,6 +30,16 @@ func (s *SQLiteStore) UpsertEdge(ctx context.Context, agentID string, e Edge) er
 // the reverse edge (A→contradicts B implies B→contradicts A), enforcing the
 // EnsureContradictPair invariant from the design.
 func (s *SQLiteStore) AddEdgePair(ctx context.Context, agentID string, e Edge) error {
+	return s.AddEdgePairs(ctx, agentID, []Edge{e})
+}
+
+// AddEdgePairs writes many edges in one transaction, enforcing the same
+// bidirectional invariant for EdgeContradict. The batch amortizes the per-edge
+// transaction cost during adjacency rebuild.
+func (s *SQLiteStore) AddEdgePairs(ctx context.Context, agentID string, edges []Edge) error {
+	if len(edges) == 0 {
+		return nil
+	}
 	lock := s.agentLock(agentID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -40,26 +51,31 @@ func (s *SQLiteStore) AddEdgePair(ctx context.Context, agentID string, e Edge) e
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO edges (source_id, target_id, kind, weight, created_at, agent_id)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(agent_id, source_id, target_id, kind) DO UPDATE SET weight = excluded.weight`,
-		e.SourceID, e.TargetID, string(e.Kind), e.Weight, now, agentID); err != nil {
-		return fmt.Errorf("store: insert edge: %w", err)
-	}
-
-	if e.Kind == EdgeContradict {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO edges (source_id, target_id, kind, weight, created_at, agent_id)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(agent_id, source_id, target_id, kind) DO UPDATE SET weight = excluded.weight`,
-			e.TargetID, e.SourceID, string(EdgeContradict), e.Weight, now, agentID); err != nil {
-			return fmt.Errorf("store: insert reverse edge: %w", err)
+	for _, e := range edges {
+		if err := insertEdgeTx(ctx, tx, agentID, e.SourceID, e.TargetID, e.Kind, e.Weight, now); err != nil {
+			return fmt.Errorf("store: insert edge: %w", err)
+		}
+		if e.Kind == EdgeContradict {
+			if err := insertEdgeTx(ctx, tx, agentID, e.TargetID, e.SourceID, EdgeContradict, e.Weight, now); err != nil {
+				return fmt.Errorf("store: insert reverse edge: %w", err)
+			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit edge tx: %w", err)
+	}
+	return nil
+}
+
+// insertEdgeTx upserts one edge within an existing transaction.
+func insertEdgeTx(ctx context.Context, tx *sql.Tx, agentID, sourceID, targetID string, kind EdgeType, weight float64, now time.Time) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO edges (source_id, target_id, kind, weight, created_at, agent_id)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id, source_id, target_id, kind) DO UPDATE SET weight = excluded.weight`,
+		sourceID, targetID, string(kind), weight, now, agentID); err != nil {
+		return err
 	}
 	return nil
 }
