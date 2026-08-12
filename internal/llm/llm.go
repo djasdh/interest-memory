@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/usage"
 )
 
 // Message is one chat turn in OpenAI format.
@@ -27,11 +28,23 @@ type ChatRequest struct {
 	Temperature *float64  `json:"temperature,omitempty"`
 }
 
+// ChatUsage is the token accounting block of an OpenAI-compatible response.
+// PromptCacheHitTokens is the DeepSeek prompt_cache_hit_tokens field (input
+// tokens served from the provider's prompt cache — the direct cost saving).
+type ChatUsage struct {
+	PromptTokens          int `json:"prompt_tokens"`
+	CompletionTokens      int `json:"completion_tokens"`
+	TotalTokens           int `json:"total_tokens"`
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+}
+
 // ChatResponse mirrors the OpenAI chat completion response (non-streaming).
 type ChatResponse struct {
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+	Usage *ChatUsage `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -44,6 +57,7 @@ type Client struct {
 	model      string
 	maxTokens  int
 	httpClient *http.Client
+	tracker    *usage.Tracker
 }
 
 // New creates a chat client from config. apiKey is resolved from the config's
@@ -57,6 +71,10 @@ func New(cfg config.LLMConfig) *Client {
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 	}
 }
+
+// SetTracker wires an optional usage tracker; token deltas are reported after
+// every completion.
+func (c *Client) SetTracker(t *usage.Tracker) { c.tracker = t }
 
 // Model returns the configured model name.
 func (c *Client) Model() string { return c.model }
@@ -106,6 +124,13 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error) {
 	}
 	if len(cr.Choices) == 0 {
 		return "", fmt.Errorf("llm: empty choices")
+	}
+	if c.tracker != nil && cr.Usage != nil {
+		c.tracker.Add(usage.Usage{
+			Input:    int64(cr.Usage.PromptTokens),
+			Output:   int64(cr.Usage.CompletionTokens),
+			CacheHit: int64(cr.Usage.PromptCacheHitTokens),
+		})
 	}
 	return cr.Choices[0].Message.Content, nil
 }

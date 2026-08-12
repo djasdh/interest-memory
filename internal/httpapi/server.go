@@ -26,6 +26,7 @@ type Service interface {
 	ListPages(ctx context.Context, agentID string, pageType store.PageType) ([]store.Page, error)
 	ListPendingLinks(ctx context.Context, agentID string) ([]store.PendingLink, error)
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
+	Usage(ctx context.Context, since string) ([]store.UsageRow, error)
 	ForkManual(ctx context.Context, agentID string) (*store.Transcript, error)
 }
 
@@ -66,6 +67,7 @@ func (s *Server) Routes() []Route {
 		{Pattern: "POST /api/v1/{agent}/fork", Handler: s.handleFork},
 		{Pattern: "GET /api/v1/{agent}/jobs/{id}", Handler: s.handleJob},
 		{Pattern: "GET /api/v1/{agent}/stats", Handler: s.handleStats},
+		{Pattern: "GET /api/v1/{agent}/usage", Handler: s.handleUsage},
 	}
 }
 
@@ -302,6 +304,21 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleUsage serves per-day token usage. ?since=YYYY-MM-DD returns days from
+// that date onward (inclusive); omitted → all days.
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	since := r.URL.Query().Get("since")
+	rows, err := s.svc.Usage(r.Context(), since)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "usage: "+err.Error())
+		return
+	}
+	if rows == nil {
+		rows = []store.UsageRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": rows})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

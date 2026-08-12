@@ -48,7 +48,8 @@ func (f *fakeService) ListPages(context.Context, string, store.PageType) ([]stor
 func (f *fakeService) ListPendingLinks(context.Context, string) ([]store.PendingLink, error) {
 	return nil, nil
 }
-func (f *fakeService) Stats(context.Context, string) (map[string]int, error) { return f.stats, nil }
+func (f *fakeService) Stats(context.Context, string) (map[string]int, error)       { return f.stats, nil }
+func (f *fakeService) Usage(_ context.Context, _ string) ([]store.UsageRow, error) { return nil, nil }
 func (f *fakeService) ForkManual(context.Context, string) (*store.Transcript, error) {
 	return f.forkTx, nil
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/djasdh/interest-memory/internal/llm"
 	"github.com/djasdh/interest-memory/internal/store"
+	"github.com/djasdh/interest-memory/internal/usage"
 
 	"github.com/djasdh/my-agent-core/agent"
 	"github.com/djasdh/my-agent-core/provider"
@@ -42,19 +43,21 @@ type loopRunner func(ctx context.Context, p *provider.Provider, system string, t
 // review / wiki_write tools to persist knowledge (single-point + evidence +
 // conversation, serial loops).
 type Writer struct {
-	deps    ToolsDeps
-	prov    ProviderFactory
-	system  string
-	lang    string
-	timeout time.Duration
-	runLoop loopRunner
+	deps         ToolsDeps
+	prov         ProviderFactory
+	system       string
+	lang         string
+	timeout      time.Duration
+	runLoop      loopRunner
+	tracker      *usage.Tracker
+	verifyClaims bool
 }
 
 // NewWriter builds a Writer. deps carries store/vec/embedder/llm/searcher;
 // prov builds the LLM provider lazily per call so tests can inject a fake.
 // lang is the output language hint injected into the system prompt
 // (default "English").
-func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string) *Writer {
+func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string, verifyClaims bool) *Writer {
 	if lang == "" {
 		lang = "English"
 	}
@@ -75,14 +78,19 @@ Link rules (mandatory):
   do NOT link tool names (e.g. [[verify_claims]]), external concepts (e.g. [[PostgreSQL]]), abstract tags (e.g. [[design-decision]]), or pages that do not exist in this wiki.
 - If a related concept has no page in this wiki, do not link it with [[]]; mention it in plain text in the body.`
 	return &Writer{
-		deps:    deps,
-		prov:    prov,
-		system:  system,
-		lang:    lang,
-		timeout: 10 * time.Minute,
-		runLoop: defaultRunLoop,
+		deps:         deps,
+		prov:         prov,
+		system:       system,
+		lang:         lang,
+		timeout:      10 * time.Minute,
+		runLoop:      defaultRunLoop,
+		verifyClaims: verifyClaims,
 	}
 }
+
+// SetTracker wires an optional usage tracker; per-turn token usage from the
+// agent loop is accumulated into it.
+func (w *Writer) SetTracker(t *usage.Tracker) { w.tracker = t }
 
 func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, tools []types.Tool, prompt types.Message, emit types.EventSink) error {
 	ag := agent.NewAgent(p)
@@ -92,15 +100,22 @@ func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, to
 	return err
 }
 
-// toolsFor builds the per-point tool set.
+// toolsFor builds the per-point tool set. The verify_claims (web fact-check)
+// tool is omitted when verifyClaims is disabled so the model cannot trigger
+// network search.
 func (w *Writer) toolsFor(agentID string) []types.Tool {
-	return []types.Tool{
+	tools := []types.Tool{
 		NewQueryTool(w.deps, agentID),
 		NewTagsTool(w.deps, agentID),
-		NewVerifyClaimsTool(w.deps, w.lang),
+	}
+	if w.verifyClaims {
+		tools = append(tools, NewVerifyClaimsTool(w.deps, w.lang))
+	}
+	tools = append(tools,
 		NewReviewTool(w.deps, agentID, w.lang),
 		NewWriteTool(w.deps, agentID),
-	}
+	)
+	return tools
 }
 
 // maxCompileConcurrency bounds how many interest points the wiki stage writes
@@ -170,6 +185,13 @@ func (w *Writer) compileOne(ctx context.Context, agentID string, p *provider.Pro
 			if id, ok := ev.Args["id"].(string); ok && id != "" {
 				pointTouched = append(pointTouched, id)
 			}
+		}
+		if ev.Type == "turn_end" && ev.Message.Usage != nil && w.tracker != nil {
+			w.tracker.Add(usage.Usage{
+				Input:    int64(ev.Message.Usage.Input),
+				Output:   int64(ev.Message.Usage.Output),
+				CacheHit: int64(ev.Message.Usage.CacheRead),
+			})
 		}
 	})
 	cancel()

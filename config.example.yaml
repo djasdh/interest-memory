@@ -50,6 +50,7 @@ wiki:
   max_hops: 3                    # 协同图传播深度（至多 3 跳）| graph propagation depth (up to 3 hops)
   batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）| related pages per reconcile agent-loop batch (auto-batched when exceeded)
   language: English              # 页面输出语言（默认英文）| page output language (default English)
+  verify_claims: true            # wiki agent 是否暴露 verify_claims（联网核查）工具；false 时模型无法触发联网 | expose the verify_claims (web fact-check) tool to the wiki agent; false removes it so the model cannot trigger network search
 
 # RAG 召回
 # RAG recall
@@ -81,4 +82,14 @@ namespaces:
   # visible_to:                # 仅 custom 模式生效 | only effective in custom mode
   #   codex: [opencode, pi]
   #   claudecode: [reasonix]
+
+# 可选：MCP 搜索后端（替换内置 web_search 时，将 verify.web_tool 设为 mcp）
+# Optional: MCP search backend (set verify.web_tool to mcp to use it instead of the built-in web_search)
+mcp:
+  enabled: false                # 是否连接 MCP server 做搜索 | connect to MCP servers for search
+  search_tool: exa_search       # 目标 MCP 工具名（server_tool 格式）；空=第一个名字含 search 的工具 | target MCP tool name (server_tool format); empty = first tool whose name contains "search"
+  servers: |                    # JSON 数组（stdio/http），见 my-agent-core mcpclient.ServerConfig | JSON array (stdio/http), see my-agent-core mcpclient.ServerConfig
+    [
+      {"name":"exa","transport":"http","url":"https://mcp.exa.ai/mcp","headers":{"Authorization":"Bearer $EXA_API_KEY"}}
+    ]
 

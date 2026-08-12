@@ -92,5 +92,10 @@ type Store interface {
 	CountPages(ctx context.Context, agentID string) (int, error)
 	CountContradictions(ctx context.Context, agentID string) (int, error)
 
+	// ---- usage (token accounting, per day) ----
+	AddUsage(ctx context.Context, date string, input, output, cacheHit int64) error
+	GetUsage(ctx context.Context, date string) (*UsageRow, error)
+	ListUsage(ctx context.Context, since string) ([]UsageRow, error)
+
 	Close() error
 }

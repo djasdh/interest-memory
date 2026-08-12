@@ -57,6 +57,7 @@ func main() {
 	embedder := llm.NewEmbedder(cfg.Embedding)
 
 	svc := service.New(cfg, st, vi, llmClient, embedder)
+	defer svc.Close()
 	wk := worker.New(svc, st, cfg.Worker.JobTimeout)
 	defer wk.Close()
 

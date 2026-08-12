@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -13,11 +14,13 @@ import (
 	"github.com/djasdh/interest-memory/internal/recall"
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/transcript"
+	"github.com/djasdh/interest-memory/internal/usage"
 	"github.com/djasdh/interest-memory/internal/vec"
 	"github.com/djasdh/interest-memory/internal/verify"
 	"github.com/djasdh/interest-memory/internal/websearch"
 	"github.com/djasdh/interest-memory/internal/wiki"
 
+	"github.com/djasdh/my-agent-core/mcpclient"
 	"github.com/djasdh/my-agent-core/provider"
 	"github.com/djasdh/my-agent-core/types"
 )
@@ -37,6 +40,8 @@ type Service struct {
 	interest interest.Cleaner
 	wiki     wiki.Compiler
 	recall   recall.RecallService
+	usage    *usage.Tracker
+	mcp      *mcpclient.Manager
 }
 
 // New wires the domain services from config + infrastructure. extraWebTools
@@ -51,6 +56,15 @@ func New(
 	extraWebTools ...websearch.Tool,
 ) *Service {
 	reg := newWebSearchRegistry(cfg.Verify, extraWebTools...)
+	// Optional MCP-backed web search: register an MCP tool alongside the
+	// default "myagent" backend; verify.web_tool selects which is active.
+	var mcpMgr *mcpclient.Manager
+	if cfg.Verify.UseWebSearch && cfg.MCP.Enabled {
+		if m := connectMCP(cfg.MCP); m != nil {
+			mcpMgr = m
+			_ = reg.Register(&mcpSearchTool{mgr: m, searchTool: cfg.MCP.SearchTool})
+		}
+	}
 	verifier := verify.New(llmClient, st, reg, vi, embedder, verify.Config{
 		UseWebSearch:   cfg.Verify.UseWebSearch,
 		SearchMax:      cfg.Verify.SearchMax,
@@ -70,15 +84,61 @@ func New(
 	// Change-log retention default from config (0 = unlimited).
 	_ = st.SetLogRetainDefault(context.Background(), cfg.Log.Retain)
 
+	// Global token-usage tracker: each delta is persisted to the store's
+	// per-day usage table via the flush callback.
+	tracker := usage.NewTracker(func(date string, u usage.Usage) error {
+		return st.AddUsage(context.Background(), date, u.Input, u.Output, u.CacheHit)
+	})
+	if llmClient != nil {
+		llmClient.SetTracker(tracker)
+	}
+	if embedder != nil {
+		embedder.SetTracker(tracker)
+	}
+
+	writer := wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage(), cfg.Wiki.VerifyClaims)
+	writer.SetTracker(tracker)
+
 	return &Service{
 		cfg:      cfg,
 		store:    st,
 		fork:     fork.NewAnalyzer(llmClient, cfg.Fork, cfg.Wiki.Selective),
 		verify:   verifier,
 		interest: interest.New(embedder, vi, st, cfg.Fork),
-		wiki:     wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage()),
+		wiki:     writer,
 		recall:   recall.New(embedder, vi, st, verifier, buildNamespaceResolver(cfg, st)),
+		usage:    tracker,
+		mcp:      mcpMgr,
 	}
+}
+
+// Close releases external resources (MCP server connections). Safe to call
+// once; the usage tracker persists eagerly on every Add, so no flush is
+// needed here.
+func (s *Service) Close() {
+	if s.mcp != nil {
+		s.mcp.Close()
+		s.mcp = nil
+	}
+}
+
+// connectMCP parses config, connects to each MCP server, and returns the
+// manager (or nil on failure). Per-server connection errors are logged but
+// do not abort other servers.
+func connectMCP(cfg config.MCPConfig) *mcpclient.Manager {
+	configs, err := mcpclient.ParseConfig(cfg.Servers)
+	if err != nil {
+		log.Printf("mcp: parse servers: %v", err)
+		return nil
+	}
+	if len(configs) == 0 {
+		return nil
+	}
+	mgr := mcpclient.NewManager(configs)
+	for _, e := range mgr.ConnectAll(context.Background()) {
+		log.Printf("mcp: connect: %v", e)
+	}
+	return mgr
 }
 
 // ProcessSession runs the full pipeline for one pushed transcript
@@ -344,6 +404,12 @@ func (s *Service) Stats(ctx context.Context, agentID string) (map[string]int, er
 		"wiki_pages":      pages,
 		"contradictions":  cons,
 	}, nil
+}
+
+// Usage returns per-day token usage from (inclusive) a date onward (YYYY-MM-DD).
+// An empty since returns all days, oldest first.
+func (s *Service) Usage(ctx context.Context, since string) ([]store.UsageRow, error) {
+	return s.store.ListUsage(ctx, since)
 }
 
 // ForkManual is invoked by POST /fork: pull the oldest unprocessed

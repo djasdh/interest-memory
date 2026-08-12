@@ -22,6 +22,7 @@ type Config struct {
 	Recall     RecallConfig     `yaml:"recall"`
 	Worker     WorkerConfig     `yaml:"worker"`
 	Namespaces NamespacesConfig `yaml:"namespaces"`
+	MCP        MCPConfig        `yaml:"mcp"`
 }
 
 // Namespace modes.
@@ -62,6 +63,10 @@ type WikiConfig struct {
 	MaxHops   int    `yaml:"max_hops"`   // graph propagation depth for reconciliation
 	BatchSize int    `yaml:"batch_size"` // related pages per reconcile agent-loop batch
 	Language  string `yaml:"language"`   // wiki page output language (default English)
+	// VerifyClaims controls whether the wiki agent loop exposes the
+	// verify_claims (web fact-check) tool. false removes it so the model
+	// cannot trigger network search. Independent of verify.use_web_search.
+	VerifyClaims bool `yaml:"verify_claims"`
 }
 
 // OutputLanguage returns the configured wiki output language, defaulting to
@@ -88,6 +93,14 @@ type ServerConfig struct {
 	Host   string `yaml:"host"`
 	Port   int    `yaml:"port"`
 	DBPath string `yaml:"db_path"`
+}
+
+// MCPConfig configures the optional MCP-backed web search (replaces the
+// built-in web_search backends when enabled + selected via verify.web_tool).
+type MCPConfig struct {
+	Enabled    bool   `yaml:"enabled"`     // connect to MCP servers for search
+	Servers    string `yaml:"servers"`     // JSON array of MCP server configs (see my-agent-core mcpclient.ServerConfig)
+	SearchTool string `yaml:"search_tool"` // MCP tool name to use for web search (e.g. "exa_search"); empty = first "*search*" tool
 }
 
 type LLMConfig struct {
@@ -161,9 +174,10 @@ func Default() Config {
 			MaxCandidates:  30,
 		},
 		Wiki: WikiConfig{
-			Enabled:   true,
-			MaxHops:   3,
-			BatchSize: 10,
+			Enabled:      true,
+			MaxHops:      3,
+			BatchSize:    10,
+			VerifyClaims: true,
 		},
 		Worker: WorkerConfig{
 			// Default 45min: the wiki stage runs one agent loop per interest

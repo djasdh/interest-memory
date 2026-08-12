@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/config"
+	"github.com/djasdh/interest-memory/internal/usage"
 )
 
 // Embedder produces vector embeddings for text via an OpenAI-compatible
@@ -20,6 +21,7 @@ type Embedder struct {
 	model      string
 	dimensions int
 	httpClient *http.Client
+	tracker    *usage.Tracker
 }
 
 // NewEmbedder creates an embedding client from config.
@@ -33,6 +35,10 @@ func NewEmbedder(cfg config.EmbeddingConfig) *Embedder {
 	}
 }
 
+// SetTracker wires an optional usage tracker; embedding input tokens are
+// reported after every request.
+func (e *Embedder) SetTracker(t *usage.Tracker) { e.tracker = t }
+
 // Dimensions returns the configured vector dimensionality.
 func (e *Embedder) Dimensions() int { return e.dimensions }
 
@@ -45,6 +51,10 @@ type embedResponse struct {
 	Data []struct {
 		Embedding []float32 `json:"embedding"`
 	} `json:"data"`
+	Usage *struct {
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -103,6 +113,9 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	out := make([][]float32, 0, len(er.Data))
 	for _, d := range er.Data {
 		out = append(out, d.Embedding)
+	}
+	if e.tracker != nil && er.Usage != nil {
+		e.tracker.Add(usage.Usage{Input: int64(er.Usage.PromptTokens)})
 	}
 	return out, nil
 }

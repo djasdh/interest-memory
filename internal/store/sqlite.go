@@ -203,6 +203,13 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			PRIMARY KEY (id, agent_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_change_log_agent ON change_log(agent_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS usage (
+			date TEXT NOT NULL PRIMARY KEY,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {

@@ -578,7 +578,7 @@ func TestRebuildEdgesFromWikilinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWriter(deps, nil, "English")
+	w := NewWriter(deps, nil, "English", true)
 	if err := w.RebuildEdges(ctx, "agent-a", []string{"page-a"}); err != nil {
 		t.Fatalf("RebuildEdges: %v", err)
 	}

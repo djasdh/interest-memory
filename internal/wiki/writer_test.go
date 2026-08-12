@@ -75,7 +75,7 @@ func TestCompileRunsPerPointLoop(t *testing.T) {
 	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
 	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
 		return provider.NewConfiguredProvider(model, "test"), nil
-	}, "English")
+	}, "English", true)
 	w.runLoop = runner.run
 
 	msgs := []types.Message{
@@ -119,7 +119,7 @@ func TestCompileBackfillsEventTime(t *testing.T) {
 	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
 	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
 		return provider.NewConfiguredProvider(model, "test"), nil
-	}, "English")
+	}, "English", true)
 	w.runLoop = runner.run
 
 	et := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
