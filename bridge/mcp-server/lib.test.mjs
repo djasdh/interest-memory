@@ -89,3 +89,10 @@ test("memoryLogs failure isolated", async () => {
   const out = JSON.parse(await memoryLogs(cfg, {}))
   assert.ok(out.error)
 })
+
+test("memoryConfig mode", () => {
+  assert.equal(memoryConfig({}).mode, "auto")
+  assert.equal(memoryConfig({ INTEREST_MODE: "input" }).mode, "input")
+  assert.equal(memoryConfig({ INTEREST_MODE: "output" }).mode, "output")
+  assert.equal(memoryConfig({ INTEREST_MODE: "bogus" }).mode, "auto")
+})

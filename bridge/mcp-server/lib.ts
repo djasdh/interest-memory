@@ -8,10 +8,13 @@
 const DEFAULT_BASE_URL = "http://127.0.0.1:8899"
 const DEFAULT_TIMEOUT = 8.0
 
+export type MemoryMode = "auto" | "input" | "output"
+
 export interface MemoryConfig {
   baseUrl: string
   agent: string
   timeoutMs: number
+  mode: MemoryMode
 }
 
 export function memoryConfig(env: Record<string, string | undefined> = process.env): MemoryConfig {
@@ -22,7 +25,13 @@ export function memoryConfig(env: Record<string, string | undefined> = process.e
     baseUrl: base,
     agent: env.INTEREST_AGENT || "default",
     timeoutMs: (Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT) * 1000,
+    mode: normalizeMode(env.INTEREST_MODE),
   }
+}
+
+function normalizeMode(v?: string): MemoryMode {
+  if (v === "input" || v === "output") return v
+  return "auto"
 }
 
 /** GET /api/v1/{agent}/search → items array JSON (or error JSON string). */
