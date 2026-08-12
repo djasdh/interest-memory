@@ -17,7 +17,12 @@ import {
   ingest,
   memorySearch,
   memoryLogs,
+  pushedKey,
+  setPushedKey,
 } from "./lib.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
 
 test("resolveConfig defaults", () => {
   const cfg = resolveConfig(undefined, {});
@@ -172,3 +177,27 @@ test("memoryLogs params", async () => {
     assert.deepEqual(JSON.parse(out), [{ id: "l1" }]);
   });
 });
+
+test("resolveConfig mode", () => {
+  assert.equal(resolveConfig(undefined, {}).mode, "auto")
+  assert.equal(resolveConfig(undefined, { INTEREST_MODE: "input" }).mode, "input")
+  assert.equal(resolveConfig(undefined, { INTEREST_MODE: "output" }).mode, "output")
+  assert.equal(resolveConfig(undefined, { INTEREST_MODE: "bogus" }).mode, "auto")
+})
+
+test("pushedKey persists and caps at 10 sessions", () => {
+  const dir = mkdtempSync(join(tmpdir(), "interest-state-"))
+  process.env.INTEREST_STATE_FILE = join(dir, "state.json")
+  try {
+    assert.equal(pushedKey("agent-a", "s1"), "")
+    setPushedKey("agent-a", "s1", "key-1")
+    assert.equal(pushedKey("agent-a", "s1"), "key-1")
+    for (let i = 2; i <= 11; i++) setPushedKey("agent-a", `s${i}`, `key-${i}`)
+    assert.equal(pushedKey("agent-a", "s1"), "")
+    assert.equal(pushedKey("agent-a", "s2"), "key-2")
+    assert.equal(pushedKey("agent-a", "s11"), "key-11")
+  } finally {
+    delete process.env.INTEREST_STATE_FILE
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
