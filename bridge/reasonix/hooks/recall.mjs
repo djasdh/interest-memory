@@ -12,10 +12,12 @@ let input = ""
 process.stdin.on("data", (c) => (input += c))
 process.stdin.on("end", async () => {
   try {
+    const cfg = memoryConfig()
+    if (cfg.mode === "input") process.exit(0) // input-only: no recall
     const ev = JSON.parse(input || "{}")
     const query = typeof ev.prompt === "string" ? ev.prompt.trim() : ""
     if (!query) process.exit(0)
-    const ctx = await recall(memoryConfig(), query)
+    const ctx = await recall(cfg, query)
     if (!ctx) process.exit(0)
     process.stdout.write(`<memory_context>\n${ctx}\n</memory_context>`)
     process.exit(0)

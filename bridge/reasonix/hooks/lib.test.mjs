@@ -11,7 +11,7 @@ import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { memoryConfig, recall, ingest, parseReasonixTranscript } from "./lib.mjs"
+import { memoryConfig, recall, ingest, parseReasonixTranscript, pushedKey, setPushedKey } from "./lib.mjs"
 
 test("memoryConfig defaults and env", () => {
   assert.equal(memoryConfig({}).agent, "reasonix")
@@ -95,4 +95,28 @@ test("parseReasonixTranscript extracts user/assistant turns", () => {
 
 test("parseReasonixTranscript missing file returns empty", () => {
   assert.deepEqual(parseReasonixTranscript("/nonexistent/x.jsonl"), [])
+})
+
+test("memoryConfig mode", () => {
+  assert.equal(memoryConfig({}).mode, "auto")
+  assert.equal(memoryConfig({ INTEREST_MODE: "input" }).mode, "input")
+  assert.equal(memoryConfig({ INTEREST_MODE: "output" }).mode, "output")
+  assert.equal(memoryConfig({ INTEREST_MODE: "bogus" }).mode, "auto")
+})
+
+test("pushedKey persists and caps at 10 sessions", () => {
+  const dir = mkdtempSync(join(tmpdir(), "interest-state-"))
+  process.env.INTEREST_STATE_FILE = join(dir, "state.json")
+  try {
+    assert.equal(pushedKey("agent-a", "s1"), "")
+    setPushedKey("agent-a", "s1", "key-1")
+    assert.equal(pushedKey("agent-a", "s1"), "key-1")
+    for (let i = 2; i <= 11; i++) setPushedKey("agent-a", `s${i}`, `key-${i}`)
+    assert.equal(pushedKey("agent-a", "s1"), "")
+    assert.equal(pushedKey("agent-a", "s2"), "key-2")
+    assert.equal(pushedKey("agent-a", "s11"), "key-11")
+  } finally {
+    delete process.env.INTEREST_STATE_FILE
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

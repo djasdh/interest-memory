@@ -6,7 +6,7 @@
  * Prefers the `transcript_path` from the hook event stdin; falls back to the
  * newest Reasonix session jsonl under the workspace. Best-effort; never throws.
  */
-import { ingest, memoryConfig, parseReasonixTranscript } from "./lib.mjs"
+import { ingest, memoryConfig, parseReasonixTranscript, pushedKey, setPushedKey } from "./lib.mjs"
 import { readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 
@@ -34,6 +34,8 @@ let input = ""
 process.stdin.on("data", (c) => (input += c))
 process.stdin.on("end", async () => {
   try {
+    const cfg = memoryConfig()
+    if (cfg.mode === "output") process.exit(0) // output-only: no ingest
     const ev = JSON.parse(input || "{}")
     let transcriptPath = typeof ev.transcript_path === "string" ? ev.transcript_path : ""
     const sessionID = typeof ev.session_id === "string" ? ev.session_id : ""
@@ -43,7 +45,10 @@ process.stdin.on("end", async () => {
     if (!transcriptPath || !sessionID) process.exit(0)
     const turns = parseReasonixTranscript(transcriptPath)
     if (!turns.length) process.exit(0)
-    await ingest(memoryConfig(), sessionID, turns, new Date().toISOString())
+    const lastKey = `${turns.length}:${turns[turns.length - 1].content.slice(0, 200)}`
+    if (lastKey === pushedKey(cfg.agent, sessionID)) process.exit(0)
+    await ingest(cfg, sessionID, turns, new Date().toISOString())
+    setPushedKey(cfg.agent, sessionID, lastKey)
     process.exit(0)
   } catch {
     process.exit(0)
