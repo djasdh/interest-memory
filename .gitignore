@@ -29,5 +29,8 @@ docs/*-audit.md
 bin/
 dist/
 
+# benchmark/eval scripts + generated results (local, not versioned)
+bench/
+
 # isolated worktrees
 .worktrees/
