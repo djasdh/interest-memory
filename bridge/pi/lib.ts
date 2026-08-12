@@ -1,17 +1,25 @@
 /**
  * interest-memory — shared pure logic for the pi extension.
  *
- * Dependency-free module (only global `fetch`/`AbortSignal`), so tests can
- * import it without the pi runtime.
+ * Dependency-free module (only global `fetch`/`AbortSignal` plus node builtins),
+ * so tests can import it without the pi runtime.
  */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { homedir } from "node:os"
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8899"
 const DEFAULT_TIMEOUT = 8.0
+const MAX_STATE_SESSIONS = 10
+
+export type MemoryMode = "auto" | "input" | "output"
 
 export interface MemoryConfig {
   baseUrl: string
   agent: string
   timeoutMs: number
+  mode: MemoryMode
 }
 
 export function memoryConfig(env: Record<string, string | undefined> = process.env): MemoryConfig {
@@ -22,7 +30,61 @@ export function memoryConfig(env: Record<string, string | undefined> = process.e
     baseUrl: base,
     agent: env.INTEREST_AGENT || "pi",
     timeoutMs: (Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT) * 1000,
+    mode: normalizeMode(env.INTEREST_MODE),
   }
+}
+
+function normalizeMode(v?: string): MemoryMode {
+  if (v === "input" || v === "output") return v
+  return "auto"
+}
+
+// ── durable per-session ingest dedupe (resume protection) ────────────────
+//
+// Keeps the last pushed transcript fingerprint per session on disk so a
+// resumed session (process restart, same session id) skips re-ingesting an
+// unchanged transcript. Only the 10 most recent sessions are retained.
+
+function statePath(): string {
+  return process.env.INTEREST_STATE_FILE || join(homedir(), ".interest-memory", "bridge-state.json")
+}
+
+function loadState(): Record<string, Record<string, string>> {
+  try {
+    const parsed = JSON.parse(readFileSync(statePath(), "utf8"))
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, Record<string, string>>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveState(state: Record<string, Record<string, string>>): void {
+  try {
+    mkdirSync(dirname(statePath()), { recursive: true })
+    writeFileSync(statePath(), JSON.stringify(state))
+  } catch {
+    // best-effort: dedupe is an optimization, not a correctness guarantee
+  }
+}
+
+/** Last pushed fingerprint for a session ("" if never pushed). */
+export function pushedKey(cfg: MemoryConfig, sessionID: string): string {
+  return loadState()[cfg.agent]?.[sessionID] ?? ""
+}
+
+/** Record a session's last pushed fingerprint, retaining the 10 most recent. */
+export function setPushedKey(cfg: MemoryConfig, sessionID: string, key: string): void {
+  const state = loadState()
+  const agentMap = state[cfg.agent] ?? {}
+  delete agentMap[sessionID] // move to end = most recent
+  agentMap[sessionID] = key
+  const keys = Object.keys(agentMap)
+  while (keys.length > MAX_STATE_SESSIONS) {
+    const oldest = keys.shift()
+    if (oldest) delete agentMap[oldest]
+  }
+  state[cfg.agent] = agentMap
+  saveState(state)
 }
 
 export interface WireTurn {

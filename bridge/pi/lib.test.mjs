@@ -8,7 +8,10 @@
 import { test } from "node:test"
 import assert from "node:assert"
 import { createServer } from "node:http"
-import { memoryConfig, extractTurns, lastUserText, recall, ingest, memorySearch, memoryLogs } from "./lib.ts"
+import { memoryConfig, extractTurns, lastUserText, recall, ingest, memorySearch, memoryLogs, pushedKey, setPushedKey } from "./lib.ts"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { mkdtempSync, rmSync } from "node:fs"
 
 test("memoryConfig defaults", () => {
   const cfg = memoryConfig({})
@@ -163,4 +166,29 @@ test("memoryLogs params", async () => {
     const out = await memoryLogs(cfg, { limit: 5, offset: 2 })
     assert.deepEqual(JSON.parse(out), [{ id: "l1" }])
   })
+})
+
+test("memoryConfig mode", () => {
+  assert.equal(memoryConfig({}).mode, "auto")
+  assert.equal(memoryConfig({ INTEREST_MODE: "input" }).mode, "input")
+  assert.equal(memoryConfig({ INTEREST_MODE: "output" }).mode, "output")
+  assert.equal(memoryConfig({ INTEREST_MODE: "bogus" }).mode, "auto")
+})
+
+test("pushedKey persists and caps at 10 sessions", () => {
+  const dir = mkdtempSync(join(tmpdir(), "interest-state-"))
+  process.env.INTEREST_STATE_FILE = join(dir, "state.json")
+  const cfg = memoryConfig({ INTEREST_AGENT: "agent-a" })
+  try {
+    assert.equal(pushedKey(cfg, "s1"), "")
+    setPushedKey(cfg, "s1", "key-1")
+    assert.equal(pushedKey(cfg, "s1"), "key-1")
+    for (let i = 2; i <= 11; i++) setPushedKey(cfg, `s${i}`, `key-${i}`)
+    assert.equal(pushedKey(cfg, "s1"), "")
+    assert.equal(pushedKey(cfg, "s2"), "key-2")
+    assert.equal(pushedKey(cfg, "s11"), "key-11")
+  } finally {
+    delete process.env.INTEREST_STATE_FILE
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
