@@ -29,26 +29,28 @@ import {
   memoryConfig,
   memoryLogs,
   memorySearch,
+  pushedKey,
   recall,
+  setPushedKey,
   type WireTurn,
 } from "./memory-lib.ts"
 
-/** In-memory per-session state: dedupe recall + track pushed message ids. */
-interface SessionState {
-  lastRecallKey: string
-  lastPushedKey: string
-}
-
 export default function MemoryPlugin(input: PluginInput): Hooks {
   const cfg = memoryConfig()
-  const states = new Map<string, SessionState>()
+  // Per-session recall dedupe (in-memory only: recall should re-run on resume).
+  const lastRecall = new Map<string, string>()
   // Latest full message list per session, captured from the transform hook.
   // Print/one-shot modes don't persist messages to the store, so this is the
   // only source for session-end ingest there.
   const lastTransformMessages = new Map<string, unknown[]>()
 
-  return {
-    tool: {
+  // Hooks are assembled conditionally per INTEREST_MODE:
+  //   input  → ingest only (no tools, no recall)
+  //   output → recall + tools only (no ingest)
+  const hooks: Hooks = { dispose: async () => {} }
+
+  if (cfg.mode !== "input") {
+    hooks.tool = {
       memory_search: tool({
         description:
           "Search the interest-memory knowledge base and return full entries (body/claims/evidence) with their relationship edges. Pass 'query' for a semantic search, or 'id' to fetch one specific page/interest point by id (id wins when both are given).",
@@ -72,13 +74,15 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
           return { output: await memoryLogs(cfg, args) }
         },
       }),
-    },
+    }
+  }
 
-    // Inject recall context once per user turn (before each LLM call) and
-    // cache the latest message list for session-end ingest (print/one-shot
-    // modes don't persist messages to the store, so client.session.messages
-    // returns nothing there).
-    "experimental.chat.messages.transform": async (_input, output) => {
+  // Inject recall context once per user turn (before each LLM call) and
+  // cache the latest message list for session-end ingest (print/one-shot
+  // modes don't persist messages to the store, so client.session.messages
+  // returns nothing there).
+  if (cfg.mode !== "input") {
+    hooks["experimental.chat.messages.transform"] = async (_input, output) => {
       const messages = output.messages as Array<{
         info?: { id?: string; sessionID?: string; role?: string }
         parts?: Array<{ type?: string; text?: string }>
@@ -93,11 +97,9 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
       const lastUser = lastUserText(messages)
       if (!lastUser) return
       if (!sessionID) return
-      const state = states.get(sessionID) ?? { lastRecallKey: "", lastPushedKey: "" }
-      states.set(sessionID, state)
       const key = `${last?.info?.id ?? ""}:${lastUser.slice(0, 200)}`
-      if (key === state.lastRecallKey) return
-      state.lastRecallKey = key
+      if (key === lastRecall.get(sessionID)) return
+      lastRecall.set(sessionID, key)
       const ctx = await recall(cfg, lastUser)
       if (!ctx) return
       // Clone the last real user message's info and swap in recall context so
@@ -112,10 +114,13 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
         .find((m) => m.info?.role === "user")?.info
       const injected = buildMemoryTurn(baseInfo, ctx)
       output.messages.splice(messages.length - 1, 0, injected as never)
-    },
+    }
+  }
 
-    // Push the transcript when the session goes idle or is deleted.
-    event: async ({ event }) => {
+  // Push the transcript when the session goes idle or is deleted. Ingest is
+  // deduped against the on-disk pushed fingerprint so a resumed session skips.
+  if (cfg.mode !== "output") {
+    hooks.event = async ({ event }) => {
       if (event.type !== "session.status" && event.type !== "session.deleted") return
       const properties = event.properties as {
         sessionID?: string
@@ -126,9 +131,6 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
       if (!sessionID) return
       const isIdle = event.type === "session.deleted" || properties?.status?.type === "idle"
       if (!isIdle) return
-
-      const state = states.get(sessionID) ?? { lastRecallKey: "", lastPushedKey: "" }
-      states.set(sessionID, state)
 
       // Give in-flight parts a moment to flush before pulling the transcript.
       await new Promise((r) => setTimeout(r, 2000))
@@ -148,17 +150,15 @@ export default function MemoryPlugin(input: PluginInput): Hooks {
         const turns = extractTurns(messages)
         if (!turns.length) return
         const lastKey = `${turns.length}:${turns[turns.length - 1].content.slice(0, 200)}`
-        if (lastKey === state.lastPushedKey) return
-        state.lastPushedKey = lastKey
+        if (lastKey === pushedKey(cfg, sessionID)) return
         await ingest(cfg, sessionID, turns)
-        if (event.type === "session.deleted") states.delete(sessionID)
+        setPushedKey(cfg, sessionID, lastKey)
+        if (event.type === "session.deleted") lastRecall.delete(sessionID)
       } catch {
         // Failure isolation: never crash the session for a memory push.
       }
-    },
-
-    dispose: async () => {
-      // Best-effort: nothing buffered outside the event handler.
-    },
+    }
   }
+
+  return hooks
 }
