@@ -25,6 +25,7 @@ import datetime
 import json
 import logging
 import os
+import pathlib
 import threading
 import time as _time
 from typing import Any, Dict, List, Optional
@@ -36,6 +37,60 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASE_URL = "http://127.0.0.1:8899"
 _DEFAULT_TIMEOUT = 8.0
 _SESSION_END_TIMEOUT = 15.0
+_MAX_STATE_SESSIONS = 10
+
+
+# ── durable per-session ingest dedupe (resume protection) ──────────────────
+#
+# Keeps the last pushed transcript fingerprint per session on disk so a
+# resumed session (same session id) skips re-ingesting an unchanged
+# transcript. Only the 10 most recent sessions are retained.
+
+def _state_path() -> str:
+    return os.environ.get(
+        "INTEREST_STATE_FILE",
+        str(pathlib.Path.home() / ".interest-memory" / "bridge-state.json"),
+    )
+
+
+def _load_state() -> Dict[str, Dict[str, str]]:
+    try:
+        with open(_state_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_state(state: Dict[str, Dict[str, str]]) -> None:
+    try:
+        p = pathlib.Path(_state_path())
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass  # best-effort
+
+
+def _pushed_key(agent: str, session_id: str) -> str:
+    return _load_state().get(agent, {}).get(session_id, "")
+
+
+def _set_pushed_key(agent: str, session_id: str, key: str) -> None:
+    state = _load_state()
+    agent_map = state.setdefault(agent, {})
+    agent_map.pop(session_id, None)  # move to end = most recent
+    agent_map[session_id] = key
+    while len(agent_map) > _MAX_STATE_SESSIONS:
+        oldest = next(iter(agent_map))
+        del agent_map[oldest]
+    state[agent] = agent_map
+    _save_state(state)
+
+
+def _normalize_mode(v: Optional[str]) -> str:
+    if v in ("input", "output"):
+        return v
+    return "auto"
 
 
 class InterestMemoryProvider(MemoryProvider):
@@ -50,6 +105,9 @@ class InterestMemoryProvider(MemoryProvider):
         self._turns: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._skip_writes = False
+        self._mode = "auto"
+        self._skip_recall = False
+        self._skip_ingest = False
         self._session_started_at = 0.0
 
     # -- Core lifecycle -----------------------------------------------------
@@ -75,6 +133,12 @@ class InterestMemoryProvider(MemoryProvider):
         if not agent:
             agent = kwargs.get("agent_identity") or kwargs.get("profile") or "default"
         self._agent_id = str(agent)
+
+        # INTEREST_MODE: input = ingest only (no recall/tools); output =
+        # recall + tools only (no ingest).
+        self._mode = _normalize_mode(os.environ.get("INTEREST_MODE"))
+        self._skip_recall = self._mode == "input"
+        self._skip_ingest = self._mode == "output"
 
         # Non-primary contexts (cron system prompts, subagent flushes) would
         # corrupt the user representation — skip writes there.
@@ -112,7 +176,7 @@ class InterestMemoryProvider(MemoryProvider):
         build_memory_context_block. On any failure returns "" so the turn is
         never blocked (failure isolation).
         """
-        if self._skip_writes or not query:
+        if self._skip_writes or self._skip_recall or not query:
             return ""
         try:
             import requests
@@ -160,7 +224,7 @@ class InterestMemoryProvider(MemoryProvider):
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Push the full buffered transcript to the backend."""
-        if self._skip_writes:
+        if self._skip_writes or self._skip_ingest:
             return
         # If the manager passes the full history, prefer it over the buffer.
         rows = _extract_turns(messages)
@@ -172,6 +236,10 @@ class InterestMemoryProvider(MemoryProvider):
             self._turns = []
             self._turn_count = 0
         if not turns:
+            return
+        # Resume protection: skip when this session's transcript is unchanged.
+        last_key = f"{len(turns)}:{turns[-1]['content'][:200]}"
+        if last_key == _pushed_key(self._agent_id, self._session_id):
             return
         try:
             import requests
@@ -188,8 +256,11 @@ class InterestMemoryProvider(MemoryProvider):
             )
             if resp.status_code not in (200, 201, 202):
                 logger.warning("interest ingest %s → %d: %s", url, resp.status_code, resp.text[:200])
+                return
         except Exception as exc:
             logger.warning("interest ingest failed (will be lost, backend keeps transcripts): %s", exc)
+            return
+        _set_pushed_key(self._agent_id, self._session_id, last_key)
 
     def shutdown(self) -> None:
         """Best-effort flush of any buffered turns not delivered by a normal
@@ -211,6 +282,8 @@ class InterestMemoryProvider(MemoryProvider):
           content + edges). Takes precedence over query when both given.
         - ``top_k``: max hits for query search (default 3).
         """
+        if self._skip_recall:
+            return []
         return [
             {
                 "name": "memory_search",

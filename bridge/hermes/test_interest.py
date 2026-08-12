@@ -88,7 +88,16 @@ class ProviderTest(unittest.TestCase):
         os.environ.pop("INTEREST_BASE_URL", None)
         os.environ.pop("INTEREST_AGENT", None)
         os.environ.pop("INTEREST_TIMEOUT", None)
+        os.environ.pop("INTEREST_MODE", None)
+        import tempfile
+        self._state_dir = tempfile.mkdtemp(prefix="interest-state-")
+        os.environ["INTEREST_STATE_FILE"] = os.path.join(self._state_dir, "state.json")
         self.p = MOD.InterestMemoryProvider()
+
+    def tearDown(self):
+        os.environ.pop("INTEREST_STATE_FILE", None)
+        import shutil
+        shutil.rmtree(self._state_dir, ignore_errors=True)
 
     def test_name_and_availability(self):
         self.assertEqual(self.p.name, "interest")
@@ -293,6 +302,63 @@ class ProviderTest(unittest.TestCase):
         with mock.patch("requests.get", side_effect=RuntimeError("boom")):
             out = self.p.handle_tool_call("memory_logs", {})
         self.assertIn("error", json.loads(out))
+
+
+class ModeTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("INTEREST_MODE", None)
+        os.environ.pop("INTEREST_STATE_FILE", None)
+        self.p = MOD.InterestMemoryProvider()
+
+    def test_mode_defaults_auto(self):
+        self.p.initialize("s1")
+        self.assertEqual(self.p._mode, "auto")
+        self.assertFalse(self.p._skip_recall)
+        self.assertFalse(self.p._skip_ingest)
+
+    def test_input_mode_skips_recall_and_tools(self):
+        os.environ["INTEREST_MODE"] = "input"
+        self.p.initialize("s1")
+        self.assertTrue(self.p._skip_recall)
+        self.assertFalse(self.p._skip_ingest)
+        self.assertEqual(self.p.prefetch("query"), "")
+        self.assertEqual(self.p.get_tool_schemas(), [])
+
+    def test_output_mode_skips_ingest(self):
+        os.environ["INTEREST_MODE"] = "output"
+        self.p.initialize("s1")
+        self.assertFalse(self.p._skip_recall)
+        self.assertTrue(self.p._skip_ingest)
+        with mock.patch("requests.post") as post:
+            self.p.on_session_end([])
+            post.assert_not_called()
+
+    def test_bogus_mode_falls_back_auto(self):
+        os.environ["INTEREST_MODE"] = "bogus"
+        self.p.initialize("s1")
+        self.assertEqual(self.p._mode, "auto")
+
+
+class StateDedupeTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="interest-state-")
+        os.environ["INTEREST_STATE_FILE"] = os.path.join(self.dir, "state.json")
+
+    def tearDown(self):
+        os.environ.pop("INTEREST_STATE_FILE", None)
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_pushed_key_persists_and_caps(self):
+        self.assertEqual(MOD._pushed_key("agent-a", "s1"), "")
+        MOD._set_pushed_key("agent-a", "s1", "key-1")
+        self.assertEqual(MOD._pushed_key("agent-a", "s1"), "key-1")
+        for i in range(2, 12):
+            MOD._set_pushed_key("agent-a", f"s{i}", f"key-{i}")
+        self.assertEqual(MOD._pushed_key("agent-a", "s1"), "")
+        self.assertEqual(MOD._pushed_key("agent-a", "s2"), "key-2")
+        self.assertEqual(MOD._pushed_key("agent-a", "s11"), "key-11")
 
 
 if __name__ == "__main__":
