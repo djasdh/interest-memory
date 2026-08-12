@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
-	github.com/djasdh/my-agent-core v0.1.1
+	github.com/djasdh/my-agent-core v0.1.2
 	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/powerman/goldmark-obsidian v0.2.0
 	github.com/yuin/goldmark v1.8.5
