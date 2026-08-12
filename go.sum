@@ -9,8 +9,8 @@ github.com/chromedp/sysutil v1.1.0/go.mod h1:WiThHUdltqCNKGc4gaU50XgYjwjYIhKWoHG
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/djasdh/my-agent-core v0.1.0 h1:1x0n4m36l2RCgMNZsMOVtnMpRNkw6d46CnaNb/qwSQI=
-github.com/djasdh/my-agent-core v0.1.0/go.mod h1:J2dz4NaB31mvdxfFYgrZILIsSucNkJkMeXrvldFoTz0=
+github.com/djasdh/my-agent-core v0.1.1 h1:2V/59bPCryYMn+Xf2w/3HlZ8e96cmldZMb5pDxK6QwA=
+github.com/djasdh/my-agent-core v0.1.1/go.mod h1:J2dz4NaB31mvdxfFYgrZILIsSucNkJkMeXrvldFoTz0=
 github.com/forPelevin/gomoji v1.4.1 h1:7U+Bl8o6RV/dOQz7coQFWj/jX6Ram6/cWFOuFDEPEUo=
 github.com/forPelevin/gomoji v1.4.1/go.mod h1:mM6GtmCgpoQP2usDArc6GjbXrti5+FffolyQfGgPboQ=
 github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2 h1:iizUGZ9pEquQS5jTGkh4AqeeHCMbfbjeb0zMt0aEFzs=
