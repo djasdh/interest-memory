@@ -3,10 +3,13 @@
  *
  * Dependency-free (node:fs + global fetch), so tests can import it directly.
  */
-import { readFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { homedir } from "node:os"
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8899"
 const DEFAULT_TIMEOUT = 8.0
+const MAX_STATE_SESSIONS = 10
 
 export function memoryConfig(env = process.env) {
   const base = (env.INTEREST_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "")
@@ -16,7 +19,57 @@ export function memoryConfig(env = process.env) {
     baseUrl: base,
     agent: env.INTEREST_AGENT || "codex",
     timeoutMs: (Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT) * 1000,
+    mode: normalizeMode(env.INTEREST_MODE),
   }
+}
+
+function normalizeMode(v) {
+  if (v === "input" || v === "output") return v
+  return "auto"
+}
+
+// ── durable per-session ingest dedupe (resume protection) ────────────────
+
+function statePath() {
+  return process.env.INTEREST_STATE_FILE || join(homedir(), ".interest-memory", "bridge-state.json")
+}
+
+function loadState() {
+  try {
+    const parsed = JSON.parse(readFileSync(statePath(), "utf8"))
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveState(state) {
+  try {
+    mkdirSync(dirname(statePath()), { recursive: true })
+    writeFileSync(statePath(), JSON.stringify(state))
+  } catch {
+    // best-effort
+  }
+}
+
+/** Last pushed fingerprint for a session ("" if never pushed). */
+export function pushedKey(agent, sessionID) {
+  return loadState()[agent]?.[sessionID] ?? ""
+}
+
+/** Record a session's last pushed fingerprint, retaining the 10 most recent. */
+export function setPushedKey(agent, sessionID, key) {
+  const state = loadState()
+  const agentMap = state[agent] ?? {}
+  delete agentMap[sessionID] // move to end = most recent
+  agentMap[sessionID] = key
+  const keys = Object.keys(agentMap)
+  while (keys.length > MAX_STATE_SESSIONS) {
+    const oldest = keys.shift()
+    if (oldest) delete agentMap[oldest]
+  }
+  state[agent] = agentMap
+  saveState(state)
 }
 
 /** GET /api/v1/{agent}/recall?query= → bare text (or "" on failure). */
