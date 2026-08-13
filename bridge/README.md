@@ -33,6 +33,7 @@ All failures are silent: a down service never blocks a session. When
 | claudecode | `bridge/claudecode/` | `claude --plugin-dir bridge/claudecode` | plugin (`.claude-plugin/plugin.json`) |
 | codex | `bridge/codex/` | `~/.codex/hooks.json` + `~/.codex/config.toml` | plugin (`.codex-plugin/plugin.json`) / hooks |
 | reasonix | `bridge/reasonix/` | `reasonix plugin install bridge/reasonix --link --yes` | plugin (`reasonix-plugin.json`) |
+| DSH | `bridge/dsh/` | Cordis row (`@djasdh/interest-memory-dsh-bridge`) | Cordis plugin (`npm` package) |
 
 ## MCP server (codex / claudecode / reasonix)
 

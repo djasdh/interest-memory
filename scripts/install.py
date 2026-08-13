@@ -110,6 +110,8 @@ def detect_env(ctx: Ctx) -> list[str]:
         agents.append("pi")
     if (Path.home() / ".hermes").is_dir():
         agents.append("hermes")
+    if which("dsh"):
+        agents.append("dsh")
     say("可用 agent / available agents: " + (", ".join(agents) if agents else "（无）/ (none)"))
     return agents
 
@@ -422,6 +424,47 @@ def install_reasonix(ctx: Ctx) -> None:
         ctx.skipped.append("reasonix")
 
 
+def install_dsh(ctx: Ctx) -> None:
+    log_step("安装 DSH bridge / Installing DSH bridge")
+    # Prefer the published npm package; fall back to the local checkout path
+    # (pnpm file: spec installs it under the same real name) so a repo/dev
+    # install keeps working before a release or while the registry lags.
+    package = os.environ.get("INTEREST_DSH_PACKAGE", "@djasdh/interest-memory-dsh-bridge")
+    local_package = str(REPO / "bridge/dsh")
+    profile = os.environ.get("INTEREST_DSH_PROFILE", "web")
+    if _confirm(ctx, "安装 DSH bridge（dsh plugin --profile web add @djasdh/interest-memory-dsh-bridge）?"
+               " / Install DSH bridge (dsh plugin --profile web add @djasdh/interest-memory-dsh-bridge)?"):
+        if not which("dsh"):
+            warn("未找到 dsh 命令，跳过 / dsh command not found, skipping")
+            ctx.skipped.append("dsh")
+            return
+        if not which("pnpm"):
+            warn("未找到 pnpm（dsh plugin 需要它转发安装）/ pnpm not found (dsh plugin forwards to pnpm)")
+            ctx.skipped.append("dsh")
+            return
+        r = ctx.run("dsh", "plugin", "--profile", profile, "add", package)
+        if not ctx.dry_run and r.returncode != 0:
+            warn(f"npm 包安装失败（{r.returncode}），回退到本地 checkout / npm install failed "
+                 f"({r.returncode}), falling back to the local checkout")
+            r = ctx.run("dsh", "plugin", "--profile", profile, "add", local_package)
+        if not ctx.dry_run and r.returncode != 0:
+            warn(f"dsh plugin add 失败（{r.returncode}）/ dsh plugin add failed ({r.returncode})")
+            ctx.skipped.append("dsh")
+            return
+        if not ctx.dry_run:
+            warn("还需在组装里挂载一行并重启 DSH / also mount a row in the composition, then restart DSH:\n"
+                 f"  ~/.dsh/profiles/{profile}/cordis.patch.yml:\n"
+                 "    - insert:\n"
+                 "        - id: interest-memory\n"
+                 "          name: '@djasdh/interest-memory-dsh-bridge'\n"
+                 "          config:\n"
+                 "            baseUrl: http://127.0.0.1:8899\n"
+                 "            agent: dsh")
+        ctx.installed.append("dsh")
+    else:
+        ctx.skipped.append("dsh")
+
+
 BRIDGE_INSTALLERS = {
     "opencode": install_opencode,
     "pi": install_pi,
@@ -430,12 +473,13 @@ BRIDGE_INSTALLERS = {
     "claudecode": install_claudecode,
     "codex": install_codex,
     "reasonix": install_reasonix,
+    "dsh": install_dsh,
 }
 
 
 def pick_bridges(ctx: Ctx, agents: list[str]) -> list[str]:
     log_step("选择要安装的 bridge / Select bridges to install")
-    order = ["opencode", "pi", "openclaw", "hermes", "claudecode", "codex", "reasonix"]
+    order = ["opencode", "pi", "openclaw", "hermes", "claudecode", "codex", "reasonix", "dsh"]
     available = [a for a in order if a in agents]
     if not available:
         warn("没有检测到任何可安装的 agent，跳过 bridge 安装 / no installable agent detected, skipping bridge install")
@@ -460,6 +504,7 @@ BRIDGE_DESC = {
     "claudecode": "~/.claude/plugins/interest-memory",
     "codex": "~/.codex",
     "reasonix": "~/.reasonix/plugins",
+    "dsh": "DSH Cordis plugin（dsh plugin add）",
 }
 
 

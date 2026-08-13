@@ -1,0 +1,35 @@
+{
+  "name": "@djasdh/interest-memory-dsh-bridge",
+  "version": "0.1.0",
+  "description": "interest-memory ↔ DeepSeek Harness (DSH) bridge: zero-lag recall injection, session-end transcript ingest, and memory_search/memory_logs/memory_ingest tools for DSH agents.",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib/index.js",
+    "lib/lib.js"
+  ],
+  "scripts": {
+    "test": "node --test lib/lib.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "memory",
+    "agent",
+    "rag"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/djasdh/interest-memory.git"
+  },
+  "author": "djasdh"
+}

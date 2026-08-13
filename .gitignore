@@ -34,3 +34,6 @@ bench/
 
 # isolated worktrees
 .worktrees/
+
+# local demo workspace (DSH integration prototype)
+.demo/
