@@ -66,6 +66,7 @@ Multiple agent frameworks are supported out of the box, sharing one env set (`IN
 | Claude Code | official plugin + MCP (`claude --plugin-dir bridge/claudecode`) |
 | Codex | official plugin / hooks + MCP (`~/.codex/hooks.json`) |
 | Reasonix | official plugin + MCP (`reasonix plugin install bridge/reasonix --link`) |
+| DeepSeek Harness | Cordis plugin (`dsh plugin --profile web add @djasdh/interest-memory-dsh-bridge`, source `bridge/dsh/`) |
 
 Every bridge offers the same capabilities: session-start recall injection, session-end transcript push, and `memory_search` / `memory_logs` consumer tools. See `bridge/README.md`.
 
