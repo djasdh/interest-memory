@@ -104,6 +104,8 @@ bridge/hermes/       Hermes MemoryProvider 插件
 | POST | `/api/v1/{agent}/fork` | 手动触发分叉 |
 | GET | `/api/v1/{agent}/jobs/{id}` | 任务状态 |
 | GET | `/api/v1/{agent}/stats` | 统计 |
+| GET | `/api/v1/{agent}/graph` | 全量图（可视化用）：节点（兴趣点 + wiki 页，中等字段）+ 边（全部类型），id 碰撞时加前缀 |
+| GET | `/api/v1/{agent}/graph.html` | 内置 3D 可视化页：双平面社区布局、边类型/状态过滤、节点/边/层距滑杆、搜索、点击详情 |
 | GET | `/api/health` | 健康检查 |
 
 ### 命名空间

@@ -102,6 +102,8 @@ bridge/hermes/       Hermes MemoryProvider plugin
 | POST | `/api/v1/{agent}/fork` | manually trigger forking |
 | GET | `/api/v1/{agent}/jobs/{id}` | job status |
 | GET | `/api/v1/{agent}/stats` | stats |
+| GET | `/api/v1/{agent}/graph` | full graph for visualization: nodes (interest points + wiki pages, medium fields) + edges (all kinds), id-collision prefixed |
+| GET | `/api/v1/{agent}/graph.html` | embedded 3D viewer: dual-plane community layout, kind/status filters, node/link/plane-z sliders, search, click detail |
 | GET | `/api/health` | health check |
 
 ### Namespaces
