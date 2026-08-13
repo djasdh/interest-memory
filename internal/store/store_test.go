@@ -589,6 +589,52 @@ func TestEdgeAndEnsureContradictPair(t *testing.T) {
 	}
 }
 
+func TestListEdges(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Contradict pair auto-creates a reverse edge; related stays one-way.
+	if err := s.AddEdgePairs(ctx, "ag", []Edge{
+		{SourceID: "a", TargetID: "b", Kind: EdgeRelated, Weight: 0.8},
+		{SourceID: "a", TargetID: "c", Kind: EdgeContradict, Weight: 0.9},
+		{SourceID: "ip-1", TargetID: "a", Kind: EdgeHasPage, Weight: 1},
+	}); err != nil {
+		t.Fatalf("AddEdgePairs: %v", err)
+	}
+
+	edges, err := s.ListEdges(ctx, "ag")
+	if err != nil {
+		t.Fatalf("ListEdges: %v", err)
+	}
+	if len(edges) != 4 { // 3 + reverse contradicts
+		t.Fatalf("listed %d edges, want 4: %+v", len(edges), edges)
+	}
+
+	kinds := map[EdgeType]int{}
+	var hasReverse bool
+	for _, e := range edges {
+		kinds[e.Kind]++
+		if e.Kind == EdgeContradict && e.SourceID == "c" && e.TargetID == "a" {
+			hasReverse = true
+		}
+	}
+	if kinds[EdgeRelated] != 1 || kinds[EdgeContradict] != 2 || kinds[EdgeHasPage] != 1 {
+		t.Errorf("kind counts = %+v, want related=1 contradict=2 has_page=1", kinds)
+	}
+	if !hasReverse {
+		t.Error("contradict reverse edge not in ListEdges")
+	}
+
+	// Agent scoping: other agent's edges are not returned.
+	if err := s.AddEdgePair(ctx, "other", Edge{SourceID: "x", TargetID: "y", Kind: EdgeRelated, Weight: 1}); err != nil {
+		t.Fatalf("AddEdgePair other: %v", err)
+	}
+	edges2, _ := s.ListEdges(ctx, "ag")
+	if len(edges2) != 4 {
+		t.Errorf("cross-agent leak: listed %d edges, want 4", len(edges2))
+	}
+}
+
 func TestConcurrentWrites(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

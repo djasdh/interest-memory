@@ -34,6 +34,8 @@ type Store interface {
 	AddEdgePairs(ctx context.Context, agentID string, edges []Edge) error
 	Outlinks(ctx context.Context, agentID, sourceID string) ([]Edge, error)
 	Backlinks(ctx context.Context, agentID, targetID string) ([]Edge, error)
+	// ListEdges returns all edges for an agent (graph visualization).
+	ListEdges(ctx context.Context, agentID string) ([]Edge, error)
 	DeleteEdgesFor(ctx context.Context, agentID, sourceID string) error
 	// ResolveReplacement returns the live successor of an archived/superseded
 	// entity (or nil), following sequel edges. Used by recall/search to

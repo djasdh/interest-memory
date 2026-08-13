@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>interest-memory 知识图谱</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0b0e14; color: #d8dee9; }
+  #graph { width: 100%; height: 100%; }
+  #panel {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    width: 260px; max-height: calc(100vh - 24px); overflow-y: auto;
+    background: rgba(16, 20, 30, 0.92); border: 1px solid #2e3a4d; border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; box-shadow: 0 4px 20px rgba(0,0,0,.5);
+  }
+  #panel h1 { font-size: 14px; margin: 0 0 8px; color: #8ab4ff; }
+  #panel h2 { font-size: 12px; margin: 10px 0 4px; color: #a6adc0; text-transform: uppercase; letter-spacing: .5px; }
+  #panel label { display: block; margin: 2px 0; cursor: pointer; }
+  #panel input[type=range] { width: 100%; }
+  #search {
+    width: 100%; box-sizing: border-box; margin-top: 4px; padding: 6px 8px;
+    border: 1px solid #2e3a4d; border-radius: 6px; background: #10141c; color: #d8dee9; font-size: 13px;
+  }
+  .chk-row { display: flex; align-items: center; gap: 6px; }
+  .chk-row .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  #status { position: fixed; top: 12px; right: 12px; z-index: 10; font-size: 12px; background: rgba(16,20,30,.85); border: 1px solid #2e3a4d; border-radius: 6px; padding: 6px 10px; }
+  #detail {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: none; min-width: 300px; max-width: 520px;
+    background: rgba(16,20,30,.95); border: 1px solid #3b4a63; border-radius: 8px; padding: 10px 14px; font-size: 13px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.6);
+  }
+  #detail h3 { margin: 0 0 6px; font-size: 14px; }
+  #detail .meta { color: #a6adc0; font-size: 12px; }
+  #detail .tags span { display: inline-block; background: #232c3d; border-radius: 4px; padding: 1px 6px; margin: 2px 4px 2px 0; font-size: 11px; }
+  #detail .close { position: absolute; top: 6px; right: 10px; cursor: pointer; color: #8a94a8; }
+  #counts { font-size: 12px; color: #a6adc0; margin-top: 8px; border-top: 1px solid #2e3a4d; padding-top: 6px; }
+  #legend { font-size: 11px; margin-top: 4px; color: #a6adc0; }
+  #legend .row { margin: 1px 0; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+
+<div id="panel">
+  <h1>兴趣点 · Wiki 知识图谱</h1>
+
+  <h2>节点搜索</h2>
+  <input id="search" type="text" placeholder="输入标题关键词，回车定位…" autocomplete="off">
+
+  <h2>边类型</h2>
+  <label class="chk-row"><input type="checkbox" data-kind="has_page" checked><span class="dot" style="background:#ffd166"></span> has_page（兴趣点→页面）</label>
+  <label class="chk-row"><input type="checkbox" data-kind="related" checked><span class="dot" style="background:#8ab4ff"></span> related</label>
+  <label class="chk-row"><input type="checkbox" data-kind="contradicts" checked><span class="dot" style="background:#ff6b6b"></span> contradicts</label>
+  <label class="chk-row"><input type="checkbox" data-kind="sequel" checked><span class="dot" style="background:#8ce99a"></span> sequel</label>
+  <label class="chk-row"><input type="checkbox" data-kind="references" checked><span class="dot" style="background:#b197fc"></span> references</label>
+
+  <h2>节点状态</h2>
+  <label class="chk-row"><input type="checkbox" data-status="active" checked><span class="dot" style="background:#4dd0e1"></span> active</label>
+  <label class="chk-row"><input type="checkbox" data-status="archived" checked><span class="dot" style="background:#8a94a8"></span> archived</label>
+  <label class="chk-row"><input type="checkbox" data-status="superseded" checked><span class="dot" style="background:#ffa94d"></span> superseded</label>
+
+  <h2>节点大小</h2>
+  <input id="nodeSize" type="range" min="0.3" max="3.0" value="0.9" step="0.1">
+  <div id="nodeSize-val" style="font-size:11px;color:#a6adc0">× 0.9</div>
+
+  <h2>层间距</h2>
+  <input id="planeZ" type="range" min="0.5" max="3.0" value="1.0" step="0.1">
+  <div id="planeZ-val" style="font-size:11px;color:#a6adc0">× 1.0</div>
+
+  <h2>边粗细</h2>
+  <input id="linkSize" type="range" min="0.3" max="4.0" value="1.0" step="0.1">
+  <div id="linkSize-val" style="font-size:11px;color:#a6adc0">× 1.0</div>
+
+  <h2>连接数下限</h2>
+  <input id="degree" type="range" min="0" max="200" value="0" step="1">
+  <div id="degree-val" style="font-size:11px;color:#a6adc0">degree ≥ 0</div>
+
+  <div id="counts"></div>
+  <div id="legend">
+    <div class="row"><span style="color:#4dd0e1">●</span> 兴趣点</div>
+    <div class="row"><span style="color:#69db7c">●</span> Wiki 页面</div>
+    <div class="row"><span style="color:#ffd166">—</span> 跨平面连接（has_page）</div>
+  </div>
+</div>
+
+<div id="status">加载中…</div>
+
+<div id="detail">
+  <span class="close" onclick="closeDetail()">✕</span>
+  <h3 id="d-title"></h3>
+  <div class="meta" id="d-meta"></div>
+  <div class="tags" id="d-tags"></div>
+  <div id="d-edges" style="margin-top:6px;font-size:12px;color:#a6adc0"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js';
+import ForceGraph3D from 'https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/+esm';
+
+const agent = (location.pathname.match(/\/api\/v1\/([^/]+)\/graph\.html/) || [])[1] || '';
+const el = document.getElementById('graph');
+const statusEl = document.getElementById('status');
+
+const KIND_COLOR = { interest_point: '#4dd0e1', wiki_page: '#69db7c' };
+const STATUS_COLOR = { archived: '#8a94a8', superseded: '#ffa94d' };
+const LINK_COLOR = {
+  has_page: '#ffd166', related: '#8ab4ff', contradicts: '#ff6b6b',
+  sequel: '#8ce99a', references: '#b197fc',
+};
+const CROSS_COLOR = '#ffd166';
+
+let fg, data, nodeById = new Map(), linksByNode = new Map();
+let filters = { kinds: new Set(), statuses: new Set() };
+let minDegree = 0;
+let highlighted = null;
+let nodeScale = 1.1;
+let nodeScaleFactor = 0.9;
+let linkScaleFactor = 1.0;
+let zFactor = 1.0;
+
+// Assign curvature/rotation so parallel & bidirectional edges between the same
+// pair of nodes fan out instead of overlapping into one straight line. Single
+// edges stay straight (zero cost); only contested pairs bend.
+function assignCurvature(links) {
+  const groups = new Map();
+  for (const l of links) {
+    const a = l.source.id, b = l.target.id;
+    const key = a < b ? a + '\0' + b : b + '\0' + a;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+  for (const grp of groups.values()) {
+    const n = grp.length;
+    if (n < 2) continue;
+    grp.forEach((l, i) => {
+      l.curvature = 0.25 + 0.1 * (i % 2);
+      l.rotation = (i * Math.PI) / n;
+    });
+  }
+}
+
+// Label-propagation community detection over the edge graph. references links
+// vote with reduced weight (noisy); contradicts/related/sequel/has_page full
+// weight. Deterministic (no randomness): nodes are scanned in stable order and
+// ties break to the smaller label. O(n*deg*iters) — milliseconds at 10k+ nodes.
+function detectCommunities(nodes, links) {
+  const WEIGHT = { has_page: 1, related: 1, contradicts: 1, sequel: 1, references: 0.3 };
+  const adj = new Map(nodes.map(n => [n, new Map()]));
+  for (const l of links) {
+    const w = WEIGHT[l.kind] || 1;
+    const a = adj.get(l.source), b = adj.get(l.target);
+    a.set(l.target, (a.get(l.target) || 0) + w);
+    b.set(l.source, (b.get(l.source) || 0) + w);
+  }
+  const label = new Map(nodes.map((n, i) => [n, i]));
+  for (let iter = 0; iter < 10; iter++) {
+    for (const n of nodes) {
+      const votes = new Map();
+      for (const [nb, w] of adj.get(n)) {
+        const lb = label.get(nb);
+        votes.set(lb, (votes.get(lb) || 0) + w);
+      }
+      if (votes.size === 0) continue;
+      let best = -1, bestVotes = 0;
+      for (const [lb, c] of votes) {
+        if (c > bestVotes || (c === bestVotes && lb < best)) { best = lb; bestVotes = c; }
+      }
+      label.set(n, best);
+    }
+  }
+  const groups = new Map();
+  for (const n of nodes) {
+    const lb = label.get(n);
+    if (!groups.has(lb)) groups.set(lb, []);
+    groups.get(lb).push(n);
+  }
+  return [...groups.values()];
+}
+
+// spiralIn places nodes in a Fermat spiral around (cx, cy) at height z; higher
+// importance sits closer to the centre. Returns the spiral radius.
+function spiralIn(nodes, cx, cy, z, spacing, getImportance) {
+  const sorted = [...nodes].sort((a, b) => (getImportance(b) - getImportance(a)) || (a.title < b.title ? -1 : 1));
+  const GOLDEN = 2.399963229728653;
+  sorted.forEach((n, idx) => {
+    const r = spacing * Math.sqrt(idx + 1);
+    const theta = idx * GOLDEN;
+    n.x = cx + Math.cos(theta) * r;
+    n.y = cy + Math.sin(theta) * r;
+    n.z = z;
+  });
+  return spacing * Math.sqrt(sorted.length);
+}
+
+// communityLayout clusters nodes into communities (by connectivity), gives each
+// community a sector packed greedily so the gap between neighbours equals their
+// actual radii + GAP (auto, compact, never overlapping), and lays each
+// community's interest points and wiki pages onto the SAME x/y footprint —
+// has_page edges then run vertically once the caller sets the plane z. Returns
+// the overall scene radius.
+function communityLayout(nodes, links) {
+  const communities = detectCommunities(nodes, links).sort((a, b) => b.length - a.length);
+  const IP_SPACING = 7, PG_SPACING = 9;
+  const commRadii = communities.map(c => {
+    const ipN = c.filter(n => n.kind === 'interest_point').length;
+    const pgN = c.length - ipN;
+    return Math.max(IP_SPACING * Math.sqrt(ipN), PG_SPACING * Math.sqrt(pgN));
+  });
+
+  // Greedy circle packing by descending radius: each new community is pushed
+  // just past a placed community's rim (sampling a few angle offsets), then the
+  // nearest candidate that clears every neighbour is taken.
+  const GAP = 8;
+  const placed = [];
+  let maxR = 0;
+  const order = communities.map((_, i) => i).sort((a, b) => commRadii[b] - commRadii[a]);
+  for (const idx of order) {
+    const r = commRadii[idx];
+    let bx = 0, by = 0;
+    if (placed.length > 0) {
+      const cands = [];
+      for (const [px, py, pr] of placed) {
+        const base = Math.atan2(py, px);
+        for (const off of [-0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9]) {
+          const th = base + off;
+          const d = Math.hypot(px, py) + pr + GAP + r;
+          cands.push([d * Math.cos(th), d * Math.sin(th)]);
+        }
+      }
+      cands.sort((a, b) => (a[0] * a[0] + a[1] * a[1]) - (b[0] * b[0] + b[1] * b[1]));
+      const spot = cands.find(([x, y]) => placed.every(p => Math.hypot(x - p[0], y - p[1]) >= r + p[2] + GAP));
+      if (spot) { bx = spot[0]; by = spot[1]; }
+    }
+    placed.push([bx, by, r]);
+    spiralIn(communities[idx].filter(n => n.kind === 'interest_point'), bx, by, 0, IP_SPACING, n => n.importance || 0);
+    spiralIn(communities[idx].filter(n => n.kind === 'wiki_page'), bx, by, 0, PG_SPACING, () => 0.5);
+    maxR = Math.max(maxR, Math.hypot(bx, by) + r);
+  }
+  return maxR;
+}
+
+async function load() {
+  const url = '/api/v1/' + encodeURIComponent(agent) + '/graph';
+  const resp = await fetch(url);
+  if (!resp.ok) { statusEl.textContent = '加载失败: HTTP ' + resp.status; return; }
+  data = await resp.json();
+
+  // Assign link endpoints as objects so kind checks + community detection work.
+  nodeById = new Map(data.nodes.map(n => [n.id, n]));
+  const links = [];
+  for (const e of data.edges) {
+    const s = nodeById.get(e.source), t = nodeById.get(e.target);
+    if (s && t) { s.degree = (s.degree || 0) + 1; t.degree = (t.degree || 0) + 1; links.push({ source: s, target: t, kind: e.kind }); }
+  }
+  data.links = links;
+  linksByNode = new Map();
+  for (const l of links) {
+    for (const n of [l.source, l.target]) {
+      if (!linksByNode.has(n)) linksByNode.set(n, []);
+      linksByNode.get(n).push(l);
+    }
+  }
+  // Fan out bidirectional/parallel edges so they don't overlap.
+  assignCurvature(links);
+
+  // Community-aware dual-plane layout (connected nodes clustered into packed
+  // sectors; interest points and wiki pages share one x/y footprint per
+  // community so has_page edges run vertically between the two planes).
+  const maxR = communityLayout(data.nodes, links);
+  // Plane separation auto-scales with the scene; slider tweaks it.
+  const planeZ = Math.max(40, maxR * 0.2) * zFactor;
+  for (const n of data.nodes) n.z = n.kind === 'wiki_page' ? planeZ : 0;
+
+  filters.kinds = new Set(['has_page', 'related', 'contradicts', 'sequel', 'references']);
+  filters.statuses = new Set(['active', 'archived', 'superseded']);
+
+  fg = new ForceGraph3D(el)
+    .graphData(data)
+    .nodeId(d => d.id)
+    .linkSource('source')
+    .linkTarget('target')
+    .nodeThreeObject(n => nodeSphere(n))
+    .nodeColor(n => highlighted ? (n === highlighted ? '#ffffff' : '#787a90') : nodeColor(n))
+    .nodeOpacity(n => highlighted && n !== highlighted ? 0.15 : 0.95)
+    .linkColor(l => highlighted ? (l.source === highlighted || l.target === highlighted ? linkColor(l) : 'rgba(120,130,150,0.12)') : linkColor(l))
+    .linkOpacity(l => highlighted && l.source !== highlighted && l.target !== highlighted ? 0.1 : 0.4)
+    .linkWidth(l => linkScaleFactor * (l.kind === 'has_page' ? 0.5 : 0.25))
+    .linkCurvature(l => l.curvature || 0)
+    .linkCurveRotation(l => l.rotation || 0)
+    .nodeVisibility(n => visibleNode(n))
+    .linkVisibility(l => visibleLink(l))
+    // Position is read from node data every frame, so plane-z changes from the
+    // slider apply on refresh() without re-running the (disabled) simulation.
+    .nodePositionUpdate((n, pos) => { pos.x = n.x; pos.y = n.y; pos.z = n.z; })
+    .onNodeHover(n => {
+      if (n === highlighted) return;
+      highlighted = n;
+      fg.refresh();
+      statusEl.textContent = n ? (n.title || n.id) : `${data.nodes.length} 节点 / ${data.links.length} 边`;
+    })
+    .onNodeClick(n => showDetail(n))
+    .cooldownTicks(0);
+
+  // Static layout: drop every simulation force so the preset x/y/z planes
+  // are kept exactly (no physics — instant render at any node count).
+  fg.d3Force('charge', null);
+  fg.d3Force('link', null);
+  fg.d3Force('center', null);
+
+  // Press-and-hold left drag rotates the view; clicking a node shows its card.
+  // Node dragging is disabled so a left-drag never accidentally moves a node.
+  fg.enableNodeDrag(false);
+  fg.controls().mouseButtons = { LEFT: 0, MIDDLE: 1, RIGHT: 2 }; // ROTATE / DOLLY / PAN
+
+  fg.cameraPosition({ x: 0, y: -maxR * 1.8, z: maxR * 1.8 });
+
+  statusEl.textContent = `${data.nodes.length} 节点 / ${links.length} 边`;
+  updateCounts();
+  wireUI();
+}
+
+function nodeColor(n) {
+  if (STATUS_COLOR[n.status]) return STATUS_COLOR[n.status];
+  return KIND_COLOR[n.kind] || '#aaa';
+}
+function linkColor(l) {
+  if (l.source.kind !== l.target.kind) return CROSS_COLOR;
+  return LINK_COLOR[l.kind] || '#888';
+}
+// nodeVal is a volume-ish value that 3d-force-graph shrinks to sub-unit
+// spheres — invisible at graph scale. Build explicit-radius spheres instead so
+// the world-space node size is exactly what we layout for (diameter < spacing).
+const sphereGeoCache = new Map();
+function nodeRadius(n) {
+  return nodeScale * nodeScaleFactor * (n.kind === 'wiki_page' ? 1.2 : 0.7 + (n.importance || 0) * 1.2);
+}
+function nodeSphere(n) {
+  const r = nodeRadius(n);
+  if (!sphereGeoCache.has(r)) sphereGeoCache.set(r, new THREE.SphereGeometry(r, 12, 12));
+  const mat = new THREE.MeshLambertMaterial({ color: nodeColor(n) });
+  return new THREE.Mesh(sphereGeoCache.get(r), mat);
+}
+function visibleNode(n) {
+  if (!filters.statuses.has(n.status || 'active')) return false;
+  return (n.degree || 0) >= minDegree;
+}
+function visibleLink(l) {
+  return filters.kinds.has(l.kind);
+}
+
+function wireUI() {
+  document.querySelectorAll('#panel input[data-kind]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.checked ? filters.kinds.add(cb.dataset.kind) : filters.kinds.delete(cb.dataset.kind);
+      updateCounts(); fg.refresh();
+    });
+  });
+  document.querySelectorAll('#panel input[data-status]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.checked ? filters.statuses.add(cb.dataset.status) : filters.statuses.delete(cb.dataset.status);
+      updateCounts(); fg.refresh();
+    });
+  });
+  const deg = document.getElementById('degree');
+  deg.addEventListener('input', () => {
+    minDegree = +deg.value;
+    document.getElementById('degree-val').textContent = 'degree ≥ ' + minDegree;
+    updateCounts(); fg.refresh();
+  });
+  const nodeSizeEl = document.getElementById('nodeSize');
+  nodeSizeEl.addEventListener('input', () => {
+    nodeScaleFactor = +nodeSizeEl.value;
+    document.getElementById('nodeSize-val').textContent = '× ' + nodeScaleFactor;
+    // Re-create node objects so the new radius takes effect.
+    fg.nodeThreeObject(n => nodeSphere(n));
+    fg.refresh();
+  });
+  const linkSizeEl = document.getElementById('linkSize');
+  linkSizeEl.addEventListener('input', () => {
+    linkScaleFactor = +linkSizeEl.value;
+    document.getElementById('linkSize-val').textContent = '× ' + linkScaleFactor;
+    fg.refresh();
+  });
+  const planeZEl = document.getElementById('planeZ');
+  planeZEl.addEventListener('input', () => {
+    zFactor = +planeZEl.value;
+    document.getElementById('planeZ-val').textContent = '× ' + zFactor;
+    const pz = Math.max(40, maxR * 0.2) * zFactor;
+    for (const n of data.nodes) n.z = n.kind === 'wiki_page' ? pz : 0;
+    fg.refresh();
+  });
+  const search = document.getElementById('search');
+  search.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter') return;
+    const q = search.value.trim().toLowerCase();
+    if (!q) return;
+    const hit = data.nodes.find(n => n.title && n.title.toLowerCase().includes(q));
+    if (hit) {
+      highlighted = hit; fg.refresh();
+      fg.cameraPosition({ x: hit.x * 1.4, y: hit.y * 1.4, z: hit.z + Math.max(120, Math.abs(hit.x) * 0.5) }, hit, 1200);
+      showDetail(hit);
+    } else {
+      statusEl.textContent = '未找到：' + q;
+    }
+  });
+}
+
+function updateCounts() {
+  const visN = data.nodes.filter(visibleNode).length;
+  const visL = data.links.filter(visibleLink).length;
+  document.getElementById('counts').textContent = `显示 ${visN}/${data.nodes.length} 节点 · ${visL}/${data.links.length} 边`;
+}
+
+function showDetail(n) {
+  const title = document.getElementById('d-title');
+  const meta = document.getElementById('d-meta');
+  const tags = document.getElementById('d-tags');
+  const edges = document.getElementById('d-edges');
+  title.textContent = n.title;
+  const kind = n.kind === 'wiki_page' ? 'Wiki 页面' : '兴趣点';
+  const bits = [kind, n.status || 'active'];
+  if (n.kind === 'wiki_page' && n.page_type) bits.push(n.page_type);
+  if (n.kind === 'interest_point' && n.importance) bits.push('重要性 ' + n.importance.toFixed(2));
+  if (n.subjective) bits.push('主观');
+  bits.push('连接数 ' + (n.degree || 0));
+  meta.textContent = bits.join(' · ') + '  [' + n.id + ']';
+  tags.innerHTML = '';
+  for (const t of (n.tags || [])) {
+    const s = document.createElement('span');
+    s.textContent = t;
+    tags.appendChild(s);
+  }
+  edges.innerHTML = '';
+  for (const l of (linksByNode.get(n) || []).slice(0, 40)) {
+    const other = l.source === n ? l.target : l.source;
+    const d = document.createElement('div');
+    d.textContent = (l.source === n ? '→' : '←') + ' ' + (other.title || other.id) + '  (' + l.kind + ')';
+    d.style.cursor = 'pointer';
+    d.onmouseenter = () => { highlighted = other; fg.refresh(); };
+    d.onmouseleave = () => { highlighted = null; fg.refresh(); };
+    d.onclick = (ev) => { ev.stopPropagation(); showDetail(other); };
+    edges.appendChild(d);
+  }
+  document.getElementById('detail').style.display = 'block';
+}
+window.closeDetail = () => { document.getElementById('detail').style.display = 'none'; };
+
+load().catch(err => { statusEl.textContent = '错误: ' + err.message; });
+</script>
+</body>
+</html>

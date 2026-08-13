@@ -80,6 +80,19 @@ func insertEdgeTx(ctx context.Context, tx *sql.Tx, agentID, sourceID, targetID s
 	return nil
 }
 
+// ListEdges returns all edges for an agent (graph visualization). Order is
+// unspecified (weight DESC, matching scanEdges callers' expectation).
+func (s *SQLiteStore) ListEdges(ctx context.Context, agentID string) ([]Edge, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT source_id, target_id, kind, weight, created_at
+		FROM edges WHERE agent_id = ? ORDER BY weight DESC`, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list edges: %w", err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
 // Outlinks returns edges whose source is sourceID.
 func (s *SQLiteStore) Outlinks(ctx context.Context, agentID, sourceID string) ([]Edge, error) {
 	rows, err := s.db.QueryContext(ctx, `

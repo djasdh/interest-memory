@@ -534,3 +534,117 @@ func TestBuildNamespaceResolverModes(t *testing.T) {
 		t.Errorf("unconfigured agent visible_to = %v, want empty", ns)
 	}
 }
+
+func TestListGraphAssemblesNodesAndEdges(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
+	now := time.Now()
+
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "ip1", AgentID: "a", Name: "Go", Status: "active", Importance: 0.9,
+		Keywords: []string{"lang"}, FirstSeenAt: now, LastSeenAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertPage(ctx, store.Page{
+		ID: "pg1", AgentID: "a", PageType: store.PageConcept, Title: "Go 并发",
+		Status: "active", Tags: []string{"go"}, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertPage(ctx, store.Page{
+		ID: "pg2", AgentID: "a", PageType: store.PageSource, Title: "已归档页",
+		Status: "archived", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// has_page (ip→page), related (page→page), contradicts (auto reverse), and
+	// a dangling edge to an id with no node (must be dropped).
+	if err := st.AddEdgePairs(ctx, "a", []store.Edge{
+		{SourceID: "ip1", TargetID: "pg1", Kind: store.EdgeHasPage, Weight: 1},
+		{SourceID: "pg1", TargetID: "pg2", Kind: store.EdgeRelated, Weight: 0.5},
+		{SourceID: "pg1", TargetID: "pg2", Kind: store.EdgeContradict, Weight: 1},
+		{SourceID: "pg1", TargetID: "ghost", Kind: store.EdgeRelated, Weight: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{store: st}
+	g, err := svc.ListGraph(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Nodes) != 3 {
+		t.Fatalf("nodes = %d, want 3: %+v", len(g.Nodes), g.Nodes)
+	}
+	// Medium fields only: no summary/body leaked into the payload.
+	for _, n := range g.Nodes {
+		if n.Kind == "interest_point" && n.Importance != 0.9 {
+			t.Errorf("node %s importance = %v, want 0.9", n.ID, n.Importance)
+		}
+	}
+	// 4 stored edges + 1 reverse contradicts − 1 dangling = 4.
+	if len(g.Edges) != 4 {
+		t.Fatalf("edges = %d, want 4: %+v", len(g.Edges), g.Edges)
+	}
+	kinds := map[store.EdgeType]int{}
+	for _, e := range g.Edges {
+		kinds[e.Kind]++
+		if e.Source == "ghost" || e.Target == "ghost" {
+			t.Errorf("dangling edge survived: %+v", e)
+		}
+	}
+	if kinds[store.EdgeHasPage] != 1 || kinds[store.EdgeRelated] != 1 || kinds[store.EdgeContradict] != 2 {
+		t.Errorf("kind counts = %+v, want has_page=1 related=1 contradict=2", kinds)
+	}
+}
+
+func TestListGraphIdCollisionPrefixes(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
+	now := time.Now()
+
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "same", AgentID: "a", Name: "同名兴趣点", Status: "active",
+		FirstSeenAt: now, LastSeenAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertPage(ctx, store.Page{
+		ID: "same", AgentID: "a", PageType: store.PageConcept, Title: "同名页面",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Collided id as edge endpoint is ambiguous → dropped.
+	if err := st.AddEdgePair(ctx, "a", store.Edge{SourceID: "same", TargetID: "same", Kind: store.EdgeRelated, Weight: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{store: st}
+	g, err := svc.ListGraph(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2 (prefixed): %+v", len(g.Nodes), g.Nodes)
+	}
+	ids := map[string]bool{}
+	for _, n := range g.Nodes {
+		ids[n.ID] = true
+	}
+	if !ids["interest_point:same"] || !ids["wiki_page:same"] {
+		t.Errorf("collided nodes not prefixed: %v", ids)
+	}
+	if len(g.Edges) != 0 {
+		t.Errorf("ambiguous collided edge should be dropped, got %+v", g.Edges)
+	}
+}

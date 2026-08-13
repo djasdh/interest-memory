@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/recall"
+	"github.com/djasdh/interest-memory/internal/service"
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/worker"
 )
@@ -28,6 +29,7 @@ type Service interface {
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
 	Usage(ctx context.Context, since string) ([]store.UsageRow, error)
 	ForkManual(ctx context.Context, agentID string) (*store.Transcript, error)
+	ListGraph(ctx context.Context, agentID string) (*service.Graph, error)
 }
 
 // Worker is the async queue surface (implemented by *worker.Worker).
@@ -62,6 +64,8 @@ func (s *Server) Routes() []Route {
 		{Pattern: "GET /api/v1/{agent}/interest-points", Handler: s.handleInterestPoints},
 		{Pattern: "GET /api/v1/{agent}/wiki/pages", Handler: s.handleWikiPages},
 		{Pattern: "GET /api/v1/{agent}/pending-links", Handler: s.handlePendingLinks},
+		{Pattern: "GET /api/v1/{agent}/graph", Handler: s.handleGraph},
+		{Pattern: "GET /api/v1/{agent}/graph.html", Handler: s.handleGraphHTML},
 		{Pattern: "GET /api/v1/{agent}/search", Handler: s.handleSearch},
 		{Pattern: "GET /api/v1/{agent}/logs", Handler: s.handleLogs},
 		{Pattern: "POST /api/v1/{agent}/fork", Handler: s.handleFork},
@@ -186,6 +190,26 @@ func (s *Server) handlePendingLinks(w http.ResponseWriter, r *http.Request) {
 		links = []store.PendingLink{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": links})
+}
+
+// handleGraph serves the full agent graph (nodes + edges) for visualization.
+// Nodes are interest points + wiki pages (medium fields); edges are all five
+// kinds, unfiltered — the frontend filters by kind/status.
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	agent := r.PathValue("agent")
+	g, err := s.svc.ListGraph(r.Context(), agent)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list graph: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// handleGraphHTML serves the embedded 3D visualization page. The page fetches
+// /api/v1/{agent}/graph itself, resolving {agent} from the URL.
+func (s *Server) handleGraphHTML(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(graphHTML))
 }
 
 // handleSearch serves the consumer-side memory_search tool: ?query= does a

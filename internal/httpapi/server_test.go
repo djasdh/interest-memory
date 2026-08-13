@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/recall"
+	"github.com/djasdh/interest-memory/internal/service"
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/worker"
 )
@@ -28,6 +29,7 @@ type fakeService struct {
 	logs       []store.ChangeLog
 	savedTx    *store.Transcript
 	recallOpts recall.Options
+	graphOut   *service.Graph
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
@@ -61,6 +63,9 @@ func (f *fakeService) GetByID(_ context.Context, _, _ string) (*recall.Result, e
 }
 func (f *fakeService) ListLogs(_ context.Context, _ string, _, _ int) ([]store.ChangeLog, error) {
 	return f.logs, nil
+}
+func (f *fakeService) ListGraph(_ context.Context, _ string) (*service.Graph, error) {
+	return f.graphOut, nil
 }
 
 // fakeWorker implements Worker for handler tests.
@@ -386,6 +391,67 @@ func TestLogsEndpoint(t *testing.T) {
 	}
 	if len(body.Items) != 1 || body.Items[0].ID != "l1" || body.Items[0].Title != "P1" {
 		t.Errorf("items = %+v", body.Items)
+	}
+}
+
+func TestGraphJSON(t *testing.T) {
+	fs := &fakeService{graphOut: &service.Graph{
+		Nodes: []service.GraphNode{
+			{ID: "ip1", Kind: "interest_point", Title: "Go", Status: "active", Importance: 0.9, Tags: []string{"lang"}},
+			{ID: "pg1", Kind: "wiki_page", Title: "Go 并发", Status: "active", PageType: "concept"},
+		},
+		Edges: []service.GraphEdge{
+			{Source: "ip1", Target: "pg1", Kind: store.EdgeHasPage, Weight: 1},
+		},
+	}}
+	ts := newTestServer(fs, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("graph status = %d, want 200", resp.StatusCode)
+	}
+	var body service.Graph
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Nodes) != 2 || len(body.Edges) != 1 {
+		t.Fatalf("graph = %d nodes / %d edges, want 2/1", len(body.Nodes), len(body.Edges))
+	}
+	if body.Nodes[0].Kind != "interest_point" || body.Nodes[0].Title != "Go" {
+		t.Errorf("node[0] = %+v", body.Nodes[0])
+	}
+	if body.Edges[0].Kind != store.EdgeHasPage || body.Edges[0].Source != "ip1" {
+		t.Errorf("edge[0] = %+v", body.Edges[0])
+	}
+}
+
+func TestGraphHTML(t *testing.T) {
+	ts := newTestServer(&fakeService{}, &fakeWorker{})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/agent-a/graph.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("graph.html status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("content-type = %q, want text/html", ct)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "3d-force-graph") {
+		t.Error("graph.html missing 3d-force-graph module")
+	}
+	if !strings.Contains(buf.String(), "/graph") {
+		t.Error("graph.html missing fetch target")
 	}
 }
 
