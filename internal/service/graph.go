@@ -58,8 +58,8 @@ func (s *Service) ListGraph(ctx context.Context, agentID string) (*Graph, error)
 	}
 
 	// Resolve each bare entity id to its (kind, nodeID). Detect collisions.
-	kindOf := map[string]string{}  // bare id → kind (first write wins)
-	prefixed := map[string]bool{}  // bare ids that appear in both namespaces
+	kindOf := map[string]string{} // bare id → kind (first write wins)
+	prefixed := map[string]bool{} // bare ids that appear in both namespaces
 	for _, p := range ips {
 		if _, dup := kindOf[p.ID]; dup {
 			prefixed[p.ID] = true
