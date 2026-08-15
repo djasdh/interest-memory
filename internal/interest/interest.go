@@ -183,8 +183,13 @@ func (c *cleaner) process(ctx context.Context, agentID string, v verify.Verified
 	case best != nil && float64(bestSim) >= c.cfg.SimilarityMerge:
 		// Merge into the existing interest point.
 		existing, err := c.store.GetInterestPoint(ctx, agentID, best.ID)
-		if err != nil || existing == nil {
-			// Stale vector: create fresh instead.
+		if err != nil {
+			// A real store failure must not be mistaken for a stale vector:
+			// propagating the error avoids silently duplicating the point.
+			return nil, "", err
+		}
+		if existing == nil {
+			// Stale vector (point deleted after indexing): create fresh.
 			pt, err := c.create(ctx, agentID, v, vecV, now)
 			return pt, "", err
 		}
