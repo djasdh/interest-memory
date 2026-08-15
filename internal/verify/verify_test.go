@@ -881,6 +881,32 @@ func topicEmbedder() *fakeEmbedder {
 	}}
 }
 
+// TestCosineMismatchedLengthNoPanic guards the semantic-grouping path against
+// embedders returning vectors of different lengths (e.g. a degraded model or
+// per-text truncation). The old cosine looped over the first vector and read
+// the second by the same index — a shorter second vector panicked with
+// index-out-of-range, crashing the whole contradiction pipeline. Mismatched
+// vectors are not comparable, so cosine must return 0 instead.
+func TestCosineMismatchedLengthNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("cosine panicked on mismatched lengths: %v", r)
+		}
+	}()
+	if got := cosine([]float32{1, 2, 3}, []float32{1, 2}); got != 0 {
+		t.Errorf("cosine(mismatched) = %v, want 0", got)
+	}
+	if got := cosine([]float32{1, 2}, []float32{1, 2, 3}); got != 0 {
+		t.Errorf("cosine(mismatched reversed) = %v, want 0", got)
+	}
+	if got := cosine(nil, []float32{1}); got != 0 {
+		t.Errorf("cosine(nil, one) = %v, want 0", got)
+	}
+	if got := cosine([]float32{1, 0}, []float32{1, 0}); got != 1 {
+		t.Errorf("cosine(same) = %v, want 1", got)
+	}
+}
+
 func TestFlagContradictionsSemanticGrouping(t *testing.T) {
 	claims := []store.Claim{
 		{ID: "c0", Text: "topicA claim one"},

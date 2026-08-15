@@ -237,8 +237,13 @@ func buildAllowedSet(group []store.Claim, cands []candidatePair) map[string]bool
 	return set
 }
 
-// cosine returns the cosine similarity of two vectors (0 for degenerate ones).
+// cosine returns the cosine similarity of two vectors (0 for degenerate
+// ones or mismatched lengths — a length mismatch means the vectors are not
+// comparable; iterating the longer one would index out of range and panic).
 func cosine(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
 	var dot, na, nb float64
 	for i := range a {
 		dot += float64(a[i]) * float64(b[i])
