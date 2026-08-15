@@ -565,6 +565,48 @@ func TestQueryToolReturnsResults(t *testing.T) {
 	}
 }
 
+// TestRebuildEdgesNormalizesWikilinkTargets guards the id-normalization fix:
+// wiki_write stores page ids in normalized form (lowercase, spaces and
+// underscores -> '-'), but RebuildEdges used to look up wikilink targets
+// verbatim. A page body linking [[My Page]] or [[My_Page]] therefore never
+// matched the stored id "my-page" — the reference edge was silently dropped
+// and the target was recorded as a dead pending link even though the page
+// exists. Targets are now normalized before existence lookup.
+func TestRebuildEdgesNormalizesWikilinkTargets(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	now := timeNow()
+	if err := st.UpsertPage(ctx, store.Page{ID: "page-a", AgentID: "agent-a",
+		Title: "A", PageType: store.PageConcept, BodyMD: "links to [[My Page]] and [[My_Page]]", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	// The real page lives under the normalized id "my-page".
+	if err := st.UpsertPage(ctx, store.Page{ID: "my-page", AgentID: "agent-a",
+		Title: "My Page", PageType: store.PageConcept, BodyMD: "m", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWriter(deps, nil, "English", true)
+	if err := w.RebuildEdges(ctx, "agent-a", []string{"page-a"}); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+	edges, err := st.Outlinks(ctx, "agent-a", "page-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both spellings normalize to "my-page": exactly one reference edge.
+	if len(edges) != 1 || edges[0].TargetID != "my-page" || edges[0].Kind != store.EdgeReference {
+		t.Errorf("outlinks = %+v, want one reference edge page-a→my-page", edges)
+	}
+	pending, err := st.ListPendingLinks(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("pending links = %+v, want none (target exists)", pending)
+	}
+}
+
 func TestRebuildEdgesFromWikilinks(t *testing.T) {
 	deps, st, _ := newTestDeps(t)
 	ctx := context.Background()

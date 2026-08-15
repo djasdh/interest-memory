@@ -367,13 +367,18 @@ func (w *Writer) RebuildEdges(ctx context.Context, agentID string, touched []str
 	}
 
 	// Collect every wikilink target from the touched pages (deduped).
+	// Targets are normalized the same way wiki_write normalizes page ids
+	// (lowercase, spaces/underscores -> '-'); otherwise a link written as
+	// [[My Page]] would never match the stored id "my-page" and the
+	// reference edge would be silently dropped into the pending set.
 	type link struct{ source, target string }
 	var links []link
 	targetSeen := map[string]bool{}
 	var targets []string
 	for _, p := range pages {
-		for _, target := range ExtractWikilinks(p.BodyMD) {
-			if target == p.ID {
+		for _, raw := range ExtractWikilinks(p.BodyMD) {
+			target := normalizeID(raw)
+			if target == "" || target == p.ID {
 				continue
 			}
 			links = append(links, link{p.ID, target})
