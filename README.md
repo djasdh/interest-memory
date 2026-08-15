@@ -86,14 +86,14 @@ bridge/hermes/       Hermes MemoryProvider plugin
 ## Docs
 
 - **REST API** — `POST /api/v1/{agent}/sessions`, `GET /api/v1/{agent}/recall`, `search` / `logs` / `stats` / `jobs` (table below)
-- **Config** — fully commented `config.example.yaml` (llm / embedding / fork / verify / wiki / recall / namespaces)
+- **Config** — fully commented `config.example.yaml` (llm / embedding / fork / verify / wiki / recall / namespaces / interestmemory.kanban_exclude)
 - **Development** — `CGO_ENABLED=1 go test -race ./...`; plugin tests `node --test bridge/...`; e2e `bash scripts/e2e.sh`
 
 ### API quick reference
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/{agent}/sessions` | session-end transcript push → 202 job_id |
+| POST | `/api/v1/{agent}/sessions` | session-end transcript push → 202 job_id; optional `kanban_board` / `kanban_board_name` (board identity — when it hits `kanban_exclude` the push returns `202` + `skipped` and is never stored) |
 | GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | recall injection (optional time filters) |
 | GET | `/api/v1/{agent}/search?query= or ?id=&top_k=` | consumer query: full content + outlinks/backlinks; `?id=` jumps to a node for graph walk |
 | GET | `/api/v1/{agent}/logs?limit=&offset=` | change log (desc, paged) |
@@ -118,6 +118,23 @@ namespaces:
 ```
 
 Shared results are annotated with origin (`[from: <agent>]` on recall lines, `result.agent` in search/get).
+
+### Kanban board exclusion
+
+Kanban worker sessions push their full transcripts into memory. To keep certain boards (internal projects, transient orchestration cards, …) out of the memory base, list them in `interestmemory.kanban_exclude` — they are dropped at the ingest boundary: **not stored, not embedded, not token-accounted**.
+
+```yaml
+interestmemory:
+  kanban_exclude: ["default", "t_90c0c7ab"]   # exclude by board name or ID
+```
+
+| Aspect | Detail |
+|---|---|
+| **Default** | `[]` (empty array). Unconfigured or explicit `[]` behaves exactly like before: no board is excluded |
+| **What matches** | The board slug/ID (e.g. `default`) or its display name — either hit excludes |
+| **Matching rules** | Case-insensitive (`Default` ≈ `default`); entries and board identity are both whitespace-trimmed; blank entries are ignored |
+| **Where it takes effect** | At the `POST /sessions` boundary, before storage and before the worker queue — an excluded push returns `202` + `{"skipped":"kanban_board_excluded"}`, persists nothing and enqueues nothing, so embedding / fork extraction / token stats can never run for it |
+| **How it is wired** | The Hermes bridge attaches the board identity (`HERMES_KANBAN_BOARD` + display name) to worker pushes automatically, no extra setup; manual pushes can include `kanban_board` / `kanban_board_name` in the body |
 
 ## Dependencies
 

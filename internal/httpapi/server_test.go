@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -158,6 +159,33 @@ func TestSessionsNotExcludedWhenFlagFalse(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&out)
 	if out["job_id"] != "job-2" {
 		t.Errorf("job_id = %q, want job-2", out["job_id"])
+	}
+}
+
+func TestSessionsExcludedBoardSkipsSaveAndEnqueueOnFailure(t *testing.T) {
+	// 验收：gate 位于 SaveTranscript/Enqueue 之前——被排除的看板即使存储层
+	// 与队列都处于故障状态，也不会触发任何调用：返回 202 skipped 而非 500。
+	fs := &fakeService{kanbanExcluded: true, saveErr: errors.New("storage down")}
+	fw := &fakeWorker{jobID: "job-1", err: errors.New("queue down")}
+	ts := newTestServer(fs, fw)
+	defer ts.Close()
+
+	body := `{"session_id":"s1","turn_count":1,"raw_turns":"[]","kanban_board":"default"}`
+	resp, err := http.Post(ts.URL+"/api/v1/agent-a/sessions", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (gate must precede SaveTranscript/Enqueue)", resp.StatusCode)
+	}
+	var out map[string]string
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out["skipped"] != "kanban_board_excluded" {
+		t.Errorf("skipped = %q, want kanban_board_excluded", out["skipped"])
+	}
+	if fs.savedTx != nil {
+		t.Errorf("SaveTranscript was called for an excluded board: %+v", fs.savedTx)
 	}
 }
 

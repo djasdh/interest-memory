@@ -88,14 +88,14 @@ bridge/hermes/       Hermes MemoryProvider 插件
 ## 文档
 
 - **REST API** — `POST /api/v1/{agent}/sessions`、`GET /api/v1/{agent}/recall`、`search` / `logs` / `stats` / `jobs` 等（见下方 API 表）
-- **配置** — `config.example.yaml` 全字段注释（llm / embedding / fork / verify / wiki / recall / namespaces）
+- **配置** — `config.example.yaml` 全字段注释（llm / embedding / fork / verify / wiki / recall / namespaces / interestmemory.kanban_exclude）
 - **开发** — `CGO_ENABLED=1 go test -race ./...`；插件测试 `node --test bridge/...`；端到端 `bash scripts/e2e.sh`
 
 ### API 速查
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/v1/{agent}/sessions` | 会话末推转录 → 202 job_id |
+| POST | `/api/v1/{agent}/sessions` | 会话末推转录 → 202 job_id；可选 `kanban_board` / `kanban_board_name`（看板标识，命中 `kanban_exclude` 时返回 `202` + `skipped`，不入库） |
 | GET | `/api/v1/{agent}/recall?query=&after=&before=&days=` | 召回注入（时间过滤可选） |
 | GET | `/api/v1/{agent}/search?query= 或 ?id=&top_k=` | 消费侧查询：完整内容 + 出边/入边；`?id=` 跳到节点，支持沿图遍历 |
 | GET | `/api/v1/{agent}/logs?limit=&offset=` | 变更日志（倒序分页） |
@@ -120,6 +120,23 @@ namespaces:
 ```
 
 互通时结果标注来源（`recall` 行尾 `[from: <agent>]`，`search` 的 `result.agent` 字段）。
+
+### 看板排除
+
+跑在 kanban 上的 worker 会话会把会话原文推入记忆库。如果某些看板（如内部项目、临时编排卡）不想要进记忆，用 `interestmemory.kanban_exclude` 把它们挡在导入边界之外——**不存储、不 embedding、不计 token**：
+
+```yaml
+interestmemory:
+  kanban_exclude: ["default", "t_90c0c7ab"]   # 按名称或 ID 排除
+```
+
+| 项 | 说明 |
+|---|---|
+| **默认值** | `[]`（空数组）。未配置或显式 `[]` 时行为与之前完全一致：不排除任何看板 |
+| **匹配对象** | 看板 slug/ID（如 `default`）或显示名称，任一命中即排除 |
+| **匹配规则** | 大小写不敏感（`Default` ≈ `default`）；条目与看板身份两侧都做首尾空白 trim；空白条目忽略 |
+| **生效位置** | `POST /sessions` 入口，先于存储与 worker 队列——被排除的推送返回 `202` + `{"skipped":"kanban_board_excluded"}`，不落库、不入队，embedding/分叉提取/token 统计自然都不会发生 |
+| **接入方式** | Hermes 插件在推送时自动附带看板标识（`HERMES_KANBAN_BOARD` + 显示名），无需额外配置；手动推送可在请求体加 `kanban_board` / `kanban_board_name` |
 
 ## 依赖
 
