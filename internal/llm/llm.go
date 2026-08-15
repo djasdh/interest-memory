@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/djasdh/interest-memory/internal/config"
 	"github.com/djasdh/interest-memory/internal/usage"
@@ -161,5 +162,12 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	// Byte-level cuts can split a multi-byte UTF-8 rune; back off to the
+	// previous rune boundary so error messages stay valid UTF-8.
+	cut := s[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		_, size := utf8.DecodeLastRuneInString(cut)
+		cut = cut[:len(cut)-size]
+	}
+	return cut + "..."
 }

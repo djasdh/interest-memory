@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/djasdh/interest-memory/internal/llm"
 	"github.com/djasdh/interest-memory/internal/store"
@@ -139,7 +140,14 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	// Byte-level cuts can split a multi-byte UTF-8 rune; back off to the
+	// previous rune boundary so wiki tool output stays valid UTF-8.
+	cut := s[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		_, size := utf8.DecodeLastRuneInString(cut)
+		cut = cut[:len(cut)-size]
+	}
+	return cut + "..."
 }
 
 // edgeArg is one edge supplied by the agent.

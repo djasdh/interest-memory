@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/vec"
@@ -709,7 +710,15 @@ func truncate(s string, n int) string {
 	if n <= 0 || len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	// Byte-level cuts can split a multi-byte UTF-8 rune (CJK content is
+	// 3 bytes per rune), producing invalid UTF-8 in stored excerpts, LLM
+	// prompts and JSON output. Back off to the previous rune boundary.
+	cut := s[:n]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		_, size := utf8.DecodeLastRuneInString(cut)
+		cut = cut[:len(cut)-size]
+	}
+	return cut + "..."
 }
 
 var _ RecallService = (*service)(nil)

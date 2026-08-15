@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/djasdh/interest-memory/internal/fork"
 	"github.com/djasdh/interest-memory/internal/llm"
@@ -713,6 +714,28 @@ func TestGradeForRecallGhostPageFiltered(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("graded = %d, want 0 (ghost page filtered); got %+v", len(got), got)
+	}
+}
+
+// TestTruncateKeepsValidUTF8 guards against byte-level cuts splitting a
+// multi-byte rune: with CJK content (3 bytes per rune) the old s[:n] cut
+// produced invalid UTF-8 in stored excerpts and LLM prompts.
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	s := "中文内容中文内容中文内容"
+	got := truncate(s, 5) // lands mid-rune with byte cut
+	if !utf8.ValidString(got) {
+		t.Errorf("truncate produced invalid UTF-8: %q", got)
+	}
+	if got != "中..." {
+		t.Errorf("truncate = %q, want %q", got, "中...")
+	}
+	// Byte length must still be bounded (cut + "...").
+	if len(got) > len(s) {
+		t.Errorf("truncate grew the string: %d > %d", len(got), len(s))
+	}
+	// ASCII content is unchanged in behavior.
+	if got2 := truncate("abcdef", 3); got2 != "abc..." {
+		t.Errorf("ascii truncate = %q, want %q", got2, "abc...")
 	}
 }
 

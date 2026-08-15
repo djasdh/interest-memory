@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/vec"
@@ -380,6 +381,20 @@ func TestSearchTruncatesBody(t *testing.T) {
 	}
 	if len(results) != 1 || len(results[0].BodyMD) > 103 || !strings.HasSuffix(results[0].BodyMD, "...") {
 		t.Errorf("body not truncated to maxBodyLen: %d", len(results[0].BodyMD))
+	}
+}
+
+// TestTruncateKeepsValidUTF8 guards the recall truncate helper: byte-level
+// cuts must not split multi-byte CJK runes (producing invalid UTF-8 that
+// would corrupt stored excerpts and JSON responses).
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	s := "中文内容中文内容中文内容"
+	got := truncate(s, 5)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncate produced invalid UTF-8: %q", got)
+	}
+	if got != "中..." {
+		t.Errorf("truncate = %q, want %q", got, "中...")
 	}
 }
 
