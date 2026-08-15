@@ -186,8 +186,16 @@ func (w *Worker) setStatus(jobID string, status Status, errMsg string) {
 	}
 	j.Status = status
 	j.Error = errMsg
-	now := time.Now()
-	j.DoneAt = &now
+	if status == StatusDone || status == StatusFailed {
+		// Only terminal states carry a completion timestamp; a running job
+		// must keep DoneAt nil so clients polling done_at don't mistake a
+		// live job for a finished one (and pruneLocked's ordering stays
+		// terminal-only).
+		now := time.Now()
+		j.DoneAt = &now
+	} else {
+		j.DoneAt = nil
+	}
 }
 
 // GetJob returns a job by id.

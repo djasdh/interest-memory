@@ -168,3 +168,60 @@ func TestGetJobNotFound(t *testing.T) {
 		t.Fatalf("GetJob = %v, want ErrNoJob", err)
 	}
 }
+
+// TestDoneAtOnlyOnTerminalStates guards the lifecycle semantics: DoneAt must
+// be nil while a job is queued/running (a completion timestamp on a live job
+// makes clients poll it as finished and misleads pruneLocked ordering).
+func TestDoneAtOnlyOnTerminalStates(t *testing.T) {
+	st := newWorkerTestStore(t)
+	ctx := context.Background()
+	if err := st.SaveTranscript(ctx, store.Transcript{SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	fp := &fakeProcessor{}
+	w := New(fp, st, 5*time.Minute)
+	defer w.Close()
+
+	jobID, err := w.Enqueue(ctx, "agent-a", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Running must not carry DoneAt.
+	deadline := time.Now().Add(3 * time.Second)
+	sawRunning := false
+	for time.Now().Before(deadline) {
+		j, err := w.GetJob(ctx, jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.Status == StatusRunning {
+			sawRunning = true
+			if j.DoneAt != nil {
+				t.Errorf("running job has DoneAt=%v, want nil", j.DoneAt)
+			}
+			break
+		}
+		if j.Status == StatusDone || j.Status == StatusFailed {
+			break // finished too fast to observe running; still check final state
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Terminal state must carry DoneAt.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		j, err := w.GetJob(ctx, jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.Status == StatusDone || j.Status == StatusFailed {
+			if j.DoneAt == nil {
+				t.Errorf("terminal job (%s) has nil DoneAt, want set", j.Status)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("job stuck before terminal state (sawRunning=%v)", sawRunning)
+}
