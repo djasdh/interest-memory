@@ -68,7 +68,9 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 	if h.Kind == "interest_point" {
 		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
 		if err != nil || p == nil {
-			return title, 0, "unknown", "unknown", time.Time{}, false
+			// Entity vanished from the store (stale vector / concurrent
+			// deletion): skip rather than inject an empty "unknown" hit.
+			return "", 0, "", "", time.Time{}, true
 		}
 		if p.Status == "archived" {
 			return "", 0, "", "", time.Time{}, true
@@ -77,7 +79,9 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 	}
 	pg, err := s.store.GetPage(ctx, agentID, h.ID)
 	if err != nil || pg == nil {
-		return title, 0, "unknown", "unknown", time.Time{}, false
+		// Same ghost-entity rule as interest points: a page that is no
+		// longer in the store must not surface as an empty "unknown" hit.
+		return "", 0, "", "", time.Time{}, true
 	}
 	// Non-active pages (superseded/archived) are not recalled.
 	if pg.Status != "" && pg.Status != "active" {

@@ -680,6 +680,42 @@ func TestGradeForRecallSupersededPageFiltered(t *testing.T) {
 	}
 }
 
+// TestGradeForRecallGhostInterestPointFiltered checks that a vector hit whose
+// entity no longer exists in the store (stale index entry / concurrent
+// deletion) is skipped instead of being injected as an empty-title "unknown"
+// graded hit. The old loadEntity returned skip=false for missing entities,
+// so recall surfaced garbage rows with no title.
+func TestGradeForRecallGhostInterestPointFiltered(t *testing.T) {
+	st := &fakeStore{} // no ip stored
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{
+		{ID: "ghost-ip", AgentID: "a", Kind: "interest_point", Score: 0.9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("graded = %d, want 0 (ghost interest point filtered); got %+v", len(got), got)
+	}
+}
+
+// TestGradeForRecallGhostPageFiltered is the wiki-page twin: a stale vector
+// hit for a page that is not in the store must not become an empty "unknown"
+// row either.
+func TestGradeForRecallGhostPageFiltered(t *testing.T) {
+	st := &fakeStore{} // no page stored
+	v := New(newSerialFakeLLM(nil), st, nil, nil, nil, Config{})
+	got, err := v.GradeForRecall(context.Background(), "a", []vec.Hit{
+		{ID: "ghost-page", AgentID: "a", Kind: "wiki_page", Score: 0.7},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("graded = %d, want 0 (ghost page filtered); got %+v", len(got), got)
+	}
+}
+
 // fakeSubStore extends fakeStore with a configurable replacement so grading
 // can exercise silent substitution of superseded entities.
 type fakeSubStore struct {
