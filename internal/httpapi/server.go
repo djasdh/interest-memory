@@ -29,6 +29,7 @@ type Service interface {
 	Stats(ctx context.Context, agentID string) (map[string]int, error)
 	Usage(ctx context.Context, since string) ([]store.UsageRow, error)
 	ForkManual(ctx context.Context, agentID string) (*store.Transcript, error)
+	KanbanBoardExcluded(boardID, boardName string) bool
 	ListGraph(ctx context.Context, agentID string) (*service.Graph, error)
 }
 
@@ -94,6 +95,18 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SessionID == "" || req.RawTurns == "" {
 		writeErr(w, http.StatusBadRequest, "session_id and raw_turns are required")
+		return
+	}
+	// Kanban exclusion gate: boards listed in interestmemory.kanban_exclude
+	// are dropped at the ingest boundary — before SaveTranscript, before the
+	// worker queue, before any embedding, memory storage or token accounting.
+	// The push is acknowledged (202) so the caller's dedupe state advances and
+	// the session is not retried, but nothing is persisted or processed.
+	if s.svc.KanbanBoardExcluded(req.KanbanBoard, req.KanbanBoardName) {
+		writeJSON(w, http.StatusAccepted, map[string]string{
+			"job_id":  "",
+			"skipped": "kanban_board_excluded",
+		})
 		return
 	}
 	tx := store.Transcript{

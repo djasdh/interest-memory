@@ -244,14 +244,18 @@ class InterestMemoryProvider(MemoryProvider):
         try:
             import requests
             url = f"{self._base_url}/api/v1/{self._agent_id}/sessions"
+            payload: Dict[str, Any] = {
+                "session_id": self._session_id,
+                "turn_count": len(turns),
+                "raw_turns": json.dumps(turns, ensure_ascii=False),
+                "session_date": self._session_date_rfc3339(),
+            }
+            # Kanban worker sessions carry their board identity so the
+            # backend can drop excluded boards before storage/embedding.
+            payload.update(_kanban_identity())
             resp = requests.post(
                 url,
-                json={
-                    "session_id": self._session_id,
-                    "turn_count": len(turns),
-                    "raw_turns": json.dumps(turns, ensure_ascii=False),
-                    "session_date": self._session_date_rfc3339(),
-                },
+                json=payload,
                 timeout=_SESSION_END_TIMEOUT,
             )
             if resp.status_code not in (200, 201, 202):
@@ -385,6 +389,28 @@ class InterestMemoryProvider(MemoryProvider):
             return json.dumps(resp.json().get("items", []), ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": f"memory_logs: {exc}"}, ensure_ascii=False)
+
+
+def _kanban_identity() -> Dict[str, str]:
+    """Return the kanban board identity of the current process, if any.
+
+    Dispatcher-spawned kanban workers carry ``HERMES_KANBAN_BOARD`` (the
+    board slug/ID). The display name is read best-effort from the board's
+    ``board.json`` (fallback: the slug itself). Ordinary sessions return an
+    empty dict — no kanban identity.
+    """
+    slug = (os.environ.get("HERMES_KANBAN_BOARD") or "").strip()
+    if not slug:
+        return {}
+    name = slug
+    try:
+        from hermes_cli import kanban_db as _kb
+        meta = _kb.read_board_metadata(slug)
+        if meta.get("name"):
+            name = str(meta["name"]).strip()
+    except Exception:
+        pass  # best-effort; slug alone is a valid identifier
+    return {"kanban_board": slug, "kanban_board_name": name}
 
 
 def _extract_turns(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:

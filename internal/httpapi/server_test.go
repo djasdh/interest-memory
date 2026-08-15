@@ -30,6 +30,9 @@ type fakeService struct {
 	savedTx    *store.Transcript
 	recallOpts recall.Options
 	graphOut   *service.Graph
+	// kanbanExcluded mimics the configured interestmemory.kanban_exclude
+	// verdict; false by default (no board excluded).
+	kanbanExcluded bool
 }
 
 func (f *fakeService) ProcessSession(context.Context, string, store.Transcript) error { return nil }
@@ -37,6 +40,7 @@ func (f *fakeService) SaveTranscript(_ context.Context, t store.Transcript) erro
 	f.savedTx = &t
 	return f.saveErr
 }
+func (f *fakeService) KanbanBoardExcluded(_, _ string) bool { return f.kanbanExcluded }
 func (f *fakeService) Recall(_ context.Context, _, _ string, opts recall.Options) (string, error) {
 	f.recallOpts = opts
 	return f.recallOut, nil
@@ -101,6 +105,59 @@ func TestSessionsEnqueue(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&out)
 	if out["job_id"] != "job-1" {
 		t.Errorf("job_id = %q", out["job_id"])
+	}
+}
+
+func TestSessionsKanbanExcludedSkipsIngest(t *testing.T) {
+	fs := &fakeService{kanbanExcluded: true}
+	fw := &fakeWorker{jobID: "job-1"}
+	ts := newTestServer(fs, fw)
+	defer ts.Close()
+
+	body := `{"session_id":"s1","turn_count":3,"raw_turns":"[]","kanban_board":"default","kanban_board_name":"Default"}`
+	resp, err := http.Post(ts.URL+"/api/v1/agent-a/sessions", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	var out map[string]string
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out["skipped"] != "kanban_board_excluded" {
+		t.Errorf("skipped = %q, want kanban_board_excluded", out["skipped"])
+	}
+	if fs.savedTx != nil {
+		t.Errorf("excluded board transcript was stored: %+v", fs.savedTx)
+	}
+	if fw.jobID != "job-1" {
+		t.Errorf("worker enqueued an excluded board job (job_id = %q)", fw.jobID)
+	}
+}
+
+func TestSessionsNotExcludedWhenFlagFalse(t *testing.T) {
+	fs := &fakeService{kanbanExcluded: false}
+	fw := &fakeWorker{jobID: "job-2"}
+	ts := newTestServer(fs, fw)
+	defer ts.Close()
+
+	body := `{"session_id":"s1","turn_count":1,"raw_turns":"[]","kanban_board":"default"}`
+	resp, err := http.Post(ts.URL+"/api/v1/agent-a/sessions", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if fs.savedTx == nil {
+		t.Fatal("non-excluded board transcript was not stored")
+	}
+	var out map[string]string
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out["job_id"] != "job-2" {
+		t.Errorf("job_id = %q, want job-2", out["job_id"])
 	}
 }
 

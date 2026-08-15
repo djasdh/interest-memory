@@ -164,6 +164,38 @@ class ProviderTest(unittest.TestCase):
         raw = json.loads(body["raw_turns"])
         self.assertEqual(raw, history)
 
+    def test_on_session_end_attaches_kanban_identity(self):
+        self.p.initialize("s1")
+        self.p.sync_turn("u1", "a1")
+        env = mock.patch.dict(os.environ, {"HERMES_KANBAN_BOARD": "beta"})
+        env.start()
+        self.addCleanup(env.stop)
+        with mock.patch("requests.post") as post:
+            resp = mock.MagicMock()
+            resp.status_code = 202
+            post.return_value = resp
+            self.p.on_session_end([])
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["kanban_board"], "beta")
+        # Display name falls back to the slug when board.json is unavailable
+        # (hermes_cli import fails in the standalone test harness).
+        self.assertEqual(body["kanban_board_name"], "beta")
+
+    def test_on_session_end_omits_kanban_identity_for_ordinary_sessions(self):
+        self.p.initialize("s1")
+        self.p.sync_turn("u1", "a1")
+        env = mock.patch.dict(os.environ, {"HERMES_KANBAN_BOARD": ""})
+        env.start()
+        self.addCleanup(env.stop)
+        with mock.patch("requests.post") as post:
+            resp = mock.MagicMock()
+            resp.status_code = 202
+            post.return_value = resp
+            self.p.on_session_end([])
+        body = post.call_args.kwargs["json"]
+        self.assertNotIn("kanban_board", body)
+        self.assertNotIn("kanban_board_name", body)
+
     def test_prefetch_returns_bare_text(self):
         self.p.initialize("s1")
         with mock.patch("requests.get") as get:
