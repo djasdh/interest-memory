@@ -244,3 +244,76 @@ func TestAPIKey(t *testing.T) {
 		t.Errorf("APIKey('') = %s, want empty", got)
 	}
 }
+
+func TestKanbanExcludeDefaultsEmpty(t *testing.T) {
+	// 验收 1+2：无配置或显式 [] 时 kanban_exclude 为空 → 不排除任何看板。
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load('') error: %v", err)
+	}
+	if cfg.InterestMemory.KanbanExclude == nil {
+		t.Error("default kanban_exclude is nil, want empty slice")
+	}
+	if len(cfg.InterestMemory.KanbanExclude) != 0 {
+		t.Errorf("default kanban_exclude = %v, want empty", cfg.InterestMemory.KanbanExclude)
+	}
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	content := `
+interestmemory:
+  kanban_exclude: []
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load([]) error: %v", err)
+	}
+	if len(cfg.InterestMemory.KanbanExclude) != 0 {
+		t.Errorf("explicit [] kanban_exclude = %v, want empty", cfg.InterestMemory.KanbanExclude)
+	}
+}
+
+func TestKanbanExcludeLoaded(t *testing.T) {
+	// 验收 3：配置有排除项时后续流程可以读到。
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	content := `
+interestmemory:
+  kanban_exclude: ["default", "t_abc123"]
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	want := []string{"default", "t_abc123"}
+	got := cfg.InterestMemory.KanbanExclude
+	if len(got) != len(want) {
+		t.Fatalf("kanban_exclude = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("kanban_exclude[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// 未配置键保持默认（既有行为不变）
+	content = `
+server:
+  port: 9999
+`
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.InterestMemory.KanbanExclude) != 0 {
+		t.Errorf("unconfigured kanban_exclude = %v, want empty", cfg.InterestMemory.KanbanExclude)
+	}
+}

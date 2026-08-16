@@ -93,3 +93,15 @@ mcp:
       {"name":"exa","transport":"http","url":"https://mcp.exa.ai/mcp","headers":{"Authorization":"Bearer $EXA_API_KEY"}}
     ]
 
+
+# 服务级开关（区别于每会话运行时状态）
+# Service-level toggles (as opposed to per-session runtime state)
+# 看板排除：收集/导入看板数据时，跳过匹配的看板及其卡片/列表数据——被排除的看板不会进入
+# embedding、记忆存储或 token 统计。匹配按看板名称或 ID，大小写不敏感、忽略首尾空白。
+# Kanban exclude: boards (and their cards/lists) matching this list are skipped
+# during kanban collection/import — excluded boards never reach embedding,
+# memory storage or token stats. Matched against board name or ID,
+# case-insensitive, leading/trailing whitespace trimmed.
+interestmemory:
+  kanban_exclude: []            # 默认空数组：不排除任何看板（与未配置完全一致）| default []: no board excluded (identical to unconfigured)
+  # kanban_exclude: ["default", "t_90c0c7ab"]   # 示例：按名称或 ID 排除 | example: exclude by board name or ID
