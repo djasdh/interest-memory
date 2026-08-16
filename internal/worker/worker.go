@@ -56,6 +56,7 @@ type Worker struct {
 	queues  map[string]chan jobItem
 	jobs    map[string]*Job
 	closed  bool
+	done    chan struct{} // closed by Close; wakes senders blocked on a full queue
 	svc     Processor
 	store   store.Store
 	timeout time.Duration
@@ -78,6 +79,7 @@ func New(svc Processor, st store.Store, jobTimeout time.Duration) *Worker {
 	return &Worker{
 		queues:  make(map[string]chan jobItem),
 		jobs:    make(map[string]*Job),
+		done:    make(chan struct{}),
 		svc:     svc,
 		store:   st,
 		timeout: jobTimeout,
@@ -128,8 +130,8 @@ func (w *Worker) pruneLocked() {
 
 func (w *Worker) enqueueItem(it jobItem) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return
 	}
 	ch, ok := w.queues[it.agentID]
@@ -138,7 +140,16 @@ func (w *Worker) enqueueItem(it jobItem) {
 		w.queues[it.agentID] = ch
 		go w.runAgent(it.agentID, ch)
 	}
-	ch <- it
+	w.mu.Unlock()
+	// Send OUTSIDE the lock: when an agent's queue is full, the send blocks
+	// on backpressure. Holding the global mutex there would freeze GetJob,
+	// setStatus and every other agent's Enqueue — and since the worker that
+	// drains the queue calls setStatus (which needs the same mutex) after
+	// finishing a job, the system deadlocks permanently.
+	select {
+	case ch <- it:
+	case <-w.done: // closed while waiting: drop the item
+	}
 }
 
 func (w *Worker) runAgent(agentID string, ch <-chan jobItem) {
@@ -211,7 +222,9 @@ func (w *Worker) GetJob(_ context.Context, jobID string) (*Job, error) {
 }
 
 // Close stops all agent goroutines. Safe to call once; further Enqueue calls
-// are no-ops.
+// are no-ops. The done channel is closed first so senders blocked on a full
+// queue (backpressure outside the lock) unblock instead of panicking on a
+// closed queue channel.
 func (w *Worker) Close() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -219,6 +232,7 @@ func (w *Worker) Close() {
 		return
 	}
 	w.closed = true
+	close(w.done)
 	for _, ch := range w.queues {
 		close(ch)
 	}
