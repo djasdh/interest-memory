@@ -23,6 +23,20 @@ type Config struct {
 	Worker     WorkerConfig     `yaml:"worker"`
 	Namespaces NamespacesConfig `yaml:"namespaces"`
 	MCP        MCPConfig        `yaml:"mcp"`
+	// InterestMemory holds interest-memory service-level toggles (as opposed
+	// to per-session runtime state). KanbanExclude lists board names or IDs
+	// whose data must be skipped entirely during kanban collection/import —
+	// excluded boards never reach embedding, memory storage or token stats.
+	InterestMemory InterestMemoryConfig `yaml:"interestmemory"`
+}
+
+// InterestMemoryConfig groups service-level interest-memory settings.
+type InterestMemoryConfig struct {
+	// KanbanExclude is the list of kanban board names or IDs to exclude from
+	// collection/import. Empty (default) means no board is excluded — behaviour
+	// is identical to the pre-configuration state. Matching is case-insensitive
+	// and whitespace-trimmed against board name or board ID.
+	KanbanExclude []string `yaml:"kanban_exclude"`
 }
 
 // Namespace modes.
@@ -199,6 +213,11 @@ func Default() Config {
 		},
 		Namespaces: NamespacesConfig{
 			Mode: NamespaceIsolated,
+		},
+		// KanbanExclude defaults to an empty array: no board excluded, exactly
+		// the pre-configuration behaviour.
+		InterestMemory: InterestMemoryConfig{
+			KanbanExclude: []string{},
 		},
 	}
 }
