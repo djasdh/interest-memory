@@ -57,6 +57,12 @@ wiki:
   language: English              # 页面输出语言（默认英文）| page output language (default English)
   verify_claims: true            # wiki agent 是否暴露 verify_claims（联网核查）工具；false 时模型无法触发联网 | expose the verify_claims (web fact-check) tool to the wiki agent; false removes it so the model cannot trigger network search
   group_sim: 0.75                # wikiloop EBD 分组阈值（仅分组不合并；默认 0.75）| wikiloop EBD clustering threshold for write grouping (grouping only, no merge; default 0.75)
+  # 可信反向写回：wiki_write 落页时若携带 reliability_status/confidence/freshness_level/ttl_days/evidence，
+  # 系统按声明的 interest_point_ids 逐个回写驱动兴趣点的 reliability/freshness（归档点跳过），并写
+  # change_log（action=reliability_update）。复核结果优先于统一裁决初判。| Trusted writeback: when
+  # wiki_write carries reliability_status/confidence/freshness_level/ttl_days/evidence, the system writes
+  # them back to the driving interest points (archived points skipped) with change_log audit
+  # (action=reliability_update); review results override the adjudication's initial verdict.
 
 # RAG 召回
 # RAG recall

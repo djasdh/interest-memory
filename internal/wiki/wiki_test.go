@@ -794,6 +794,221 @@ func TestIPQueryKeywordFallback(t *testing.T) {
 	}
 }
 
+func TestWriteToolWritebackReliabilityFreshness(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "ip-1", AgentID: "agent-a", Name: "Go 1.22",
+		Reliability: store.Reliability{Status: "supported", Confidence: 0.8,
+			Evidence: []store.Evidence{{Kind: "session", SourceID: "sess-1", Excerpt: "初判"}}},
+		Freshness: store.Freshness{Level: "fresh", TTLDays: 30},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	_, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "go-1.22",
+		"title":              "Go 1.22",
+		"content":            "新特性",
+		"interest_point_ids": []any{"ip-1"},
+		"reliability_status": "contested",
+		"confidence":         0.2,
+		"freshness_level":    "stale",
+		"ttl_days":           5,
+		"evidence":           []any{"https://example.com/a", "https://example.com/b"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	p, err := st.GetInterestPoint(ctx, "agent-a", "ip-1")
+	if err != nil || p == nil {
+		t.Fatalf("point missing: %v", err)
+	}
+	if p.Reliability.Status != "contested" {
+		t.Errorf("reliability status = %q, want contested", p.Reliability.Status)
+	}
+	if p.Reliability.Confidence != 0.2 {
+		t.Errorf("confidence = %v, want 0.2", p.Reliability.Confidence)
+	}
+	if len(p.Reliability.Evidence) != 3 {
+		t.Errorf("evidence = %d entries, want 3 (1 session + 2 web)", len(p.Reliability.Evidence))
+	}
+	webCount := 0
+	for _, e := range p.Reliability.Evidence {
+		if e.Kind == "web" {
+			webCount++
+		}
+	}
+	if webCount != 2 {
+		t.Errorf("web evidence = %d, want 2", webCount)
+	}
+	if p.Freshness.Level != "stale" {
+		t.Errorf("freshness level = %q, want stale", p.Freshness.Level)
+	}
+	if p.Freshness.TTLDays != 5 {
+		t.Errorf("ttl_days = %d, want 5", p.Freshness.TTLDays)
+	}
+	if p.Freshness.UpdatedAt.IsZero() {
+		t.Errorf("freshness updated_at should be set")
+	}
+
+	logs, _ := st.ListLogs(ctx, "agent-a", 0, 0)
+	found := false
+	for _, l := range logs {
+		if l.Action == "reliability_update" && l.EntityID == "ip-1" && l.EntityKind == "interest_point" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("reliability_update log missing; logs = %+v", logs)
+	}
+}
+
+func TestWriteToolWritebackPartialKeepsOriginal(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "ip-1", AgentID: "agent-a", Name: "Go",
+		Reliability: store.Reliability{Status: "supported", Confidence: 0.8},
+		Freshness:   store.Freshness{Level: "fresh", TTLDays: 30},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "go-page",
+		"title":              "Go",
+		"content":            "x",
+		"interest_point_ids": []any{"ip-1"},
+		"reliability_status": "contested",
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	p, err := st.GetInterestPoint(ctx, "agent-a", "ip-1")
+	if err != nil || p == nil {
+		t.Fatalf("point missing: %v", err)
+	}
+	if p.Reliability.Status != "contested" {
+		t.Errorf("status = %q, want contested", p.Reliability.Status)
+	}
+	if p.Reliability.Confidence != 0.8 {
+		t.Errorf("confidence = %v, want original 0.8 preserved", p.Reliability.Confidence)
+	}
+	if p.Freshness.Level != "fresh" || p.Freshness.TTLDays != 30 {
+		t.Errorf("freshness = %+v, want original fresh/30 preserved", p.Freshness)
+	}
+}
+
+func TestWriteToolWritebackMultiplePoints(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	for _, id := range []string{"ip-1", "ip-2"} {
+		if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+			ID: id, AgentID: "agent-a", Name: "P-" + id,
+			Reliability: store.Reliability{Status: "supported", Confidence: 0.9},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "multi",
+		"title":              "Multi",
+		"content":            "x",
+		"interest_point_ids": []any{"ip-1", "ip-2"},
+		"reliability_status": "unknown",
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, id := range []string{"ip-1", "ip-2"} {
+		p, _ := st.GetInterestPoint(ctx, "agent-a", id)
+		if p == nil {
+			t.Fatalf("point %s missing", id)
+		}
+		if p.Reliability.Status != "unknown" {
+			t.Errorf("%s reliability = %q, want unknown", id, p.Reliability.Status)
+		}
+	}
+	logs, _ := st.ListLogs(ctx, "agent-a", 0, 0)
+	seen := map[string]bool{}
+	for _, l := range logs {
+		if l.Action == "reliability_update" {
+			seen[l.EntityID] = true
+		}
+	}
+	if !seen["ip-1"] || !seen["ip-2"] {
+		t.Errorf("reliability_update logs = %v, want both ip-1 and ip-2", seen)
+	}
+}
+
+func TestWriteToolWritebackSkipsArchived(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "ip-arc", AgentID: "agent-a", Name: "Obsolete", Status: "archived",
+		Reliability: store.Reliability{Status: "contested", Confidence: 0.1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "obsolete-page",
+		"title":              "Obsolete",
+		"content":            "x",
+		"interest_point_ids": []any{"ip-arc"},
+		"reliability_status": "supported",
+		"confidence":         0.9,
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	p, err := st.GetInterestPoint(ctx, "agent-a", "ip-arc")
+	if err != nil || p == nil {
+		t.Fatalf("point missing: %v", err)
+	}
+	if p.Status != "archived" {
+		t.Errorf("status = %q, want still archived", p.Status)
+	}
+	if p.Reliability.Status != "contested" || p.Reliability.Confidence != 0.1 {
+		t.Errorf("archived point was written back: %+v", p.Reliability)
+	}
+	logs, _ := st.ListLogs(ctx, "agent-a", 0, 0)
+	for _, l := range logs {
+		if l.Action == "reliability_update" {
+			t.Errorf("reliability_update log for archived point: %+v", l)
+		}
+	}
+}
+
+func TestWriteToolNoWritebackWithoutArgs(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{
+		ID: "ip-1", AgentID: "agent-a", Name: "Go",
+		Reliability: store.Reliability{Status: "supported", Confidence: 0.8},
+		Freshness:   store.Freshness{Level: "fresh", TTLDays: 30},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(deps, "agent-a")
+	if _, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "go-page",
+		"title":              "Go",
+		"content":            "x",
+		"interest_point_ids": []any{"ip-1"},
+	}, nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	p, _ := st.GetInterestPoint(ctx, "agent-a", "ip-1")
+	if p.Reliability.Status != "supported" || p.Reliability.Confidence != 0.8 {
+		t.Errorf("point changed without writeback args: %+v", p.Reliability)
+	}
+	if p.Freshness.Level != "fresh" || p.Freshness.TTLDays != 30 {
+		t.Errorf("freshness changed without writeback args: %+v", p.Freshness)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

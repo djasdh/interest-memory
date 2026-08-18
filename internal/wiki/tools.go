@@ -169,7 +169,7 @@ type claimArg struct {
 func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 	return types.Tool{
 		Name:        "wiki_write",
-		Description: "Create or update a wiki page. Use this to persist knowledge from conversations. Provide page_type (concept/source/synthesis/entity), title, content in markdown, optional edges, and optional claims.",
+		Description: "Create or update a wiki page. Use this to persist knowledge from conversations. Provide page_type (concept/source/synthesis/entity), title, content in markdown, optional edges, and optional claims. May carry post-review reliability/freshness (reliability_status, confidence, freshness_level, ttl_days, evidence) which is written back to the driving interest point(s).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -185,6 +185,27 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 				"interest_point_ids": map[string]any{
 					"type":        "array",
 					"description": "The interest point id(s) that drove this page — links the page to them via has_page edges (multi-to-one allowed)",
+					"items":       map[string]any{"type": "string"},
+				},
+				"reliability_status": map[string]any{
+					"type":        "string",
+					"description": "Optional post-review reliability to write back to the driving interest point(s): supported | contested | unknown",
+				},
+				"confidence": map[string]any{
+					"type":        "number",
+					"description": "Optional post-review confidence (0-1) to write back to the driving interest point(s)",
+				},
+				"freshness_level": map[string]any{
+					"type":        "string",
+					"description": "Optional post-review freshness to write back to the driving interest point(s): fresh | aging | stale | unknown",
+				},
+				"ttl_days": map[string]any{
+					"type":        "number",
+					"description": "Optional post-review freshness TTL (days) to write back to the driving interest point(s)",
+				},
+				"evidence": map[string]any{
+					"type":        "array",
+					"description": "Optional verification evidence (web sources / URLs) appended to the driving interest point(s)' reliability evidence",
 					"items":       map[string]any{"type": "string"},
 				},
 				"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Taxonomy tags (look up existing tags with wiki_tags and reuse them)"},
@@ -330,6 +351,12 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		logEdges = append(logEdges, store.LogEdge{Action: "add", SourceID: ipID, TargetID: id, Kind: store.EdgeHasPage, Weight: 1})
 	}
 
+	// Trusted writeback: after the page is persisted, write the post-review
+	// reliability/freshness back to the driving interest points (v2 §3.5).
+	if err := writebackReliability(ctx, deps, agentID, ipIDs, args, now); err != nil {
+		return "", err
+	}
+
 	// Claims.
 	for _, c := range claims {
 		status := c.Status
@@ -416,6 +443,72 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		action = "Updated"
 	}
 	return fmt.Sprintf("%s wiki page %q (%s, %s)", action, id, title, pageType), nil
+}
+
+// writebackReliability writes the post-review reliability/freshness from a
+// wiki_write call back to the driving interest points (v2 §3.5). Only fields
+// the model provided are updated; others keep their original values. New
+// evidence strings are appended as Kind="web" entries. Archived/deleted
+// interest points are skipped (never resurrect an obsolete memory). Each
+// writeback is audited with a reliability_update change log entry.
+func writebackReliability(ctx context.Context, deps ToolsDeps, agentID string, ipIDs []string, args types.ArgsMap, now time.Time) error {
+	status := strings.ToLower(asString(args["reliability_status"]))
+	switch status {
+	case "supported", "contested", "unknown":
+	default:
+		status = ""
+	}
+	freshness := strings.ToLower(asString(args["freshness_level"]))
+	switch freshness {
+	case "fresh", "aging", "stale", "unknown":
+	default:
+		freshness = ""
+	}
+	confidence := num(args["confidence"])
+	if confidence <= 0 || confidence > 1 {
+		confidence = 0 // 0 = not provided
+	}
+	ttl := int(num(args["ttl_days"]))
+	evidence := stringList(args["evidence"])
+	if status == "" && freshness == "" && confidence == 0 && ttl == 0 && len(evidence) == 0 {
+		return nil
+	}
+
+	for _, ipID := range ipIDs {
+		p, err := deps.Store.GetInterestPoint(ctx, agentID, ipID)
+		if err != nil {
+			return fmt.Errorf("wiki_write: writeback get %s: %w", ipID, err)
+		}
+		if p == nil || p.Status == "archived" {
+			continue
+		}
+		if status != "" {
+			p.Reliability.Status = status
+		}
+		if confidence > 0 {
+			p.Reliability.Confidence = confidence
+		}
+		for _, ev := range evidence {
+			p.Reliability.Evidence = append(p.Reliability.Evidence, store.Evidence{
+				Kind: "web", SourceID: ev, Excerpt: ev, CapturedAt: now,
+			})
+		}
+		if freshness != "" {
+			p.Freshness.Level = freshness
+		}
+		if ttl > 0 {
+			p.Freshness.TTLDays = ttl
+		}
+		p.Freshness.UpdatedAt = now
+		if err := deps.Store.UpsertInterestPoint(ctx, *p); err != nil {
+			return fmt.Errorf("wiki_write: writeback point %s: %w", ipID, err)
+		}
+		_ = deps.Store.AppendLog(ctx, store.ChangeLog{
+			AgentID: agentID, EntityKind: "interest_point", EntityID: ipID,
+			Title: p.Name, Action: "reliability_update", CreatedAt: now,
+		})
+	}
+	return nil
 }
 
 // validateEdges enforces: target exists, kind valid, no duplicate, max 8.
