@@ -12,6 +12,42 @@ import (
 	"github.com/djasdh/interest-memory/internal/verify"
 )
 
+type countingVec struct {
+	inner *fakeVec
+	calls int
+}
+
+func (c *countingVec) Search(ctx context.Context, agent string, q []float32, topK int) ([]vec.Hit, error) {
+	c.calls++
+	return c.inner.Search(ctx, agent, q, topK)
+}
+func (c *countingVec) SearchByKeywords(ctx context.Context, agent, query string, topK int) ([]vec.Hit, error) {
+	return c.inner.SearchByKeywords(ctx, agent, query, topK)
+}
+
+func TestRecallCachesAssembledContext(t *testing.T) {
+	cv := &countingVec{inner: &fakeVec{hits: []vec.Hit{
+		{ID: "p1", AgentID: "a1", Kind: "interest_point", Score: 0.9, Meta: map[string]string{"title": "t1"}},
+	}}}
+	s := New(fakeEmbedder{}, cv, &fakeStore{ips: map[string]*store.InterestPoint{
+		"p1": {ID: "p1", Name: "t1", Summary: "s1"},
+	}}, &fakeGrader{})
+	first, err := s.Recall(context.Background(), "a1", "query", Options{TopK: 5})
+	if err != nil {
+		t.Fatalf("Recall 1: %v", err)
+	}
+	second, err := s.Recall(context.Background(), "a1", "query", Options{TopK: 5})
+	if err != nil {
+		t.Fatalf("Recall 2: %v", err)
+	}
+	if cv.calls != 1 {
+		t.Errorf("vec.Search calls = %d, want 1 (second recall served from cache)", cv.calls)
+	}
+	if first != second {
+		t.Errorf("cached recall differs:\n%q\n%q", first, second)
+	}
+}
+
 type fakeEmbedder struct{}
 
 func (fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {

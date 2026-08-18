@@ -5,13 +5,24 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/djasdh/interest-memory/internal/cache"
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/vec"
 	"github.com/djasdh/interest-memory/internal/verify"
 )
+
+// recallCacheTTL bounds how long an assembled recall context is reused. The
+// store may change between calls; a short TTL keeps results fresh.
+const recallCacheTTL = 30 * time.Second
+
+type recallCacheEntry struct {
+	text    string
+	expires time.Time
+}
 
 // Embedder computes the query embedding (implemented by *llm.Embedder).
 type Embedder interface {
@@ -124,6 +135,10 @@ type service struct {
 	// are annotated with their source namespace.
 	resolver NamespaceResolver
 	annotate bool
+	// recallCache short-TTL memo of assembled recall contexts, keyed by
+	// agent+query+opts; guards against repeated embed/search calls.
+	recallCache   *cache.Cache[string, recallCacheEntry]
+	recallCacheMu sync.Mutex
 }
 
 // NamespaceResolver returns the namespaces an agent may read for a request
@@ -135,7 +150,9 @@ type NamespaceResolver func(ctx context.Context, agentID string) ([]string, erro
 // cross-namespace reads (results get annotated with their source namespace);
 // with no resolver the service reads only the agent's own namespace (isolated).
 func New(embedder Embedder, vi VectorIndex, st Store, grader Grader, resolvers ...NamespaceResolver) RecallService {
-	s := &service{embedder: embedder, vec: vi, store: st, grader: grader}
+	s := &service{embedder: embedder, vec: vi, store: st, grader: grader,
+		recallCache: cache.New[string, recallCacheEntry](512),
+	}
 	if len(resolvers) > 0 && resolvers[0] != nil {
 		s.resolver = resolvers[0]
 		s.annotate = true
@@ -220,6 +237,14 @@ func (s *service) Recall(ctx context.Context, agentID, query string, opts Option
 		opts.TopK = 8
 	}
 
+	key := recallCacheKey(agentID, query, opts)
+	s.recallCacheMu.Lock()
+	if e, ok := s.recallCache.Get(key); ok && time.Now().Before(e.expires) {
+		s.recallCacheMu.Unlock()
+		return e.text, nil
+	}
+	s.recallCacheMu.Unlock()
+
 	// Retrieve across every visible namespace, then merge (dedupe by
 	// agent+id), re-rank globally and cap to TopK.
 	var all []vec.Hit
@@ -244,7 +269,31 @@ func (s *service) Recall(ctx context.Context, agentID, query string, opts Option
 		return "", err
 	}
 
-	return s.assembleContext(graded), nil
+	ctxText := s.assembleContext(graded)
+	s.recallCacheMu.Lock()
+	s.recallCache.Set(key, recallCacheEntry{text: ctxText, expires: time.Now().Add(recallCacheTTL)})
+	s.recallCacheMu.Unlock()
+	return ctxText, nil
+}
+
+// recallCacheKey canonicalizes one recall request into a cache key. Options
+// is a value type; the After/Before pointers are only read here (no aliasing
+// writes across goroutines), so the value snapshot is safe.
+func recallCacheKey(agentID, query string, opts Options) string {
+	var b strings.Builder
+	b.WriteString(agentID)
+	b.WriteString("\x00")
+	b.WriteString(query)
+	b.WriteString("\x00")
+	fmt.Fprintf(&b, "topk=%d;wiki=%v;minscore=%.4f;", opts.TopK, opts.IncludeWiki, opts.MinScore)
+	if opts.After != nil {
+		fmt.Fprintf(&b, "after=%s;", opts.After.UTC().Format(time.RFC3339))
+	}
+	if opts.Before != nil {
+		fmt.Fprintf(&b, "before=%s;", opts.Before.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "days=%d", opts.RecentDays)
+	return b.String()
 }
 
 // assembleContext renders graded hits, annotating each with its source
