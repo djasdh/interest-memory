@@ -199,7 +199,7 @@ CGO_ENABLED=1 go test -race ./...
 
 **目标**：reconcile 兼容多对一 has_page 的 cascade 语义（v2 §8 风险 8/9 兜底）。**评测（F4/judge 3 次采样）用户决定跳过**，未实施。
 
-**实际 commit**：`<V4-commit>`。
+**实际 commit**：`abbcee9`（漏写审计日志 + 身份一致性抽查 + plan 状态同步）。
 
 **实施要点（实际实现）**：
 - **风险 9 漏写补写**：`logSkippedPoints` 从纯 stdout 升级为结构化 `AppendLog(action="wiki_write_miss")`（wiki_worthy=true 但未被任何 touched 页覆盖的点），可追踪可补写。
