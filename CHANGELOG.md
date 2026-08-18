@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-18
+
+### Added
+
+- **Trusted reliability/freshness writeback** — `wiki_write` now accepts
+  optional post-review parameters (`reliability_status`, `confidence`,
+  `freshness_level`, `ttl_days`, `evidence`). After the page is persisted, the
+  declared `interest_point_ids` are written back: evidence strings are appended
+  as `Kind=web` entries, unprovided fields keep their original values, and
+  archived/deleted points are skipped (never resurrect an obsolete memory).
+  Each writeback is audited with a `reliability_update` change-log entry —
+  review results override the unified adjudication's initial verdict, closing
+  the trusted loop (v2 §3.5).
+
+### Changed
+
+- **Skipped-write audit** — points worth a wiki page that the agent loop did
+  not cover are now persisted as `wiki_write_miss` change-log entries (was
+  stdout-only), making misses traceable and re-runnable (v2 §3.4).
+- **Identity-consistency check** — a subjective interest point folded into an
+  entity/source page is flagged via an `identity_mismatch` change-log entry;
+  read-only, never rewrites (v2 §8 risk 8).
+
 ## [0.2.2] - 2026-08-18
 
 ### Added
