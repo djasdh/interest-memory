@@ -117,6 +117,38 @@ func (s *SQLiteStore) Backlinks(ctx context.Context, agentID, targetID string) (
 	return scanEdges(rows)
 }
 
+// InterestPointPages batch-resolves has_page edges from interest point ids to
+// their wiki pages, joining the pages table for titles. Multi-to-one: one
+// interest point may drive several pages (V2 clustered wikiloop).
+func (s *SQLiteStore) InterestPointPages(ctx context.Context, agentID string, ipIDs []string) ([]InterestPage, error) {
+	if len(ipIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(ipIDs)+2)
+	args = append(args, agentID, string(EdgeHasPage))
+	for _, id := range ipIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.source_id, e.target_id, p.title
+		FROM edges e
+		LEFT JOIN wiki_pages p ON p.id = e.target_id AND p.agent_id = e.agent_id
+		WHERE e.agent_id = ? AND e.kind = ? AND e.source_id IN (`+placeholders(len(ipIDs))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: interest point pages: %w", err)
+	}
+	defer rows.Close()
+	var out []InterestPage
+	for rows.Next() {
+		var r InterestPage
+		if err := rows.Scan(&r.InterestPointID, &r.PageID, &r.PageTitle); err != nil {
+			return nil, fmt.Errorf("store: interest point pages scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // DeleteEdgesFor removes all edges originating from sourceID.
 func (s *SQLiteStore) DeleteEdgesFor(ctx context.Context, agentID, sourceID string) error {
 	lock := s.agentLock(agentID)

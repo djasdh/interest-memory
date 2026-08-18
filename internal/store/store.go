@@ -11,6 +11,11 @@ type Store interface {
 	GetInterestPoint(ctx context.Context, agentID, id string) (*InterestPoint, error)
 	// GetInterestPointsByIDs fetches interest points by id in one query.
 	GetInterestPointsByIDs(ctx context.Context, agentID string, ids []string) ([]InterestPoint, error)
+	// InterestPointPages resolves each interest point id's has_page outlinks to
+	// its wiki pages (multi-to-one: one point may map to several pages). Rows
+	// are (interest_point_id, page_id, page_title); ids with no has_page are
+	// absent. Used by IP_query and wiki_write has_page backfill.
+	InterestPointPages(ctx context.Context, agentID string, ipIDs []string) ([]InterestPage, error)
 	ListInterestPoints(ctx context.Context, agentID string) ([]InterestPoint, error)
 	SearchInterestPointsByKeywords(ctx context.Context, agentID, query string, limit int) ([]InterestPoint, error)
 

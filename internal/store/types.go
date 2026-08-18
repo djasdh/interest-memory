@@ -173,3 +173,10 @@ type ChangeLog struct {
 	Action     string    `json:"action"` // create | update | merge | archive | supersede | edge_change
 	Edges      []LogEdge `json:"edges,omitempty"`
 }
+
+// InterestPage is one (interest point → page) has_page association.
+type InterestPage struct {
+	InterestPointID string
+	PageID          string
+	PageTitle       string
+}

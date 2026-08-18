@@ -774,3 +774,47 @@ func TestListAgentIDsDistinct(t *testing.T) {
 		t.Errorf("agent ids = %v, want exactly 3 distinct", ids)
 	}
 }
+
+func TestInterestPointPagesMultiHasPage(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-1", AgentID: "a", Name: "P1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertPage(ctx, Page{ID: "page-1", AgentID: "a", Title: "Page 1", BodyMD: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertPage(ctx, Page{ID: "page-2", AgentID: "a", Title: "Page 2", BodyMD: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-1", TargetID: "page-1", Kind: EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddEdgePair(ctx, "a", Edge{SourceID: "ip-1", TargetID: "page-2", Kind: EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertInterestPoint(ctx, InterestPoint{ID: "ip-2", AgentID: "a", Name: "P2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.InterestPointPages(ctx, "a", []string{"ip-1", "ip-2", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (ip-1 has 2 pages; ip-2/missing have none)", len(got))
+	}
+	pages := map[string]string{}
+	for _, r := range got {
+		pages[r.PageID] = r.PageTitle
+	}
+	if pages["page-1"] != "Page 1" || pages["page-2"] != "Page 2" {
+		t.Errorf("pages = %+v, want page-1→Page 1, page-2→Page 2", pages)
+	}
+	for _, r := range got {
+		if r.InterestPointID != "ip-1" {
+			t.Errorf("row source = %s, want ip-1", r.InterestPointID)
+		}
+	}
+}
