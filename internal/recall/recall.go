@@ -146,6 +146,49 @@ type service struct {
 // can be dynamic (e.g. the "all" mode discovers namespaces from the store).
 type NamespaceResolver func(ctx context.Context, agentID string) ([]string, error)
 
+// entityCache dedupes per-request entity loads so repeated hits on the same
+// entity (Search across namespaces, edge title resolution) read the store once.
+type entityCache struct {
+	ips    map[string]*store.InterestPoint
+	pgs    map[string]*store.Page
+	titles map[string]string
+}
+
+func newEntityCache() *entityCache {
+	return &entityCache{ips: map[string]*store.InterestPoint{}, pgs: map[string]*store.Page{}, titles: map[string]string{}}
+}
+
+// interestPoint loads an interest point once per request, reusing the cache on
+// repeat ids.
+func (ec *entityCache) interestPoint(ctx context.Context, agentID, id string, st Store) (*store.InterestPoint, error) {
+	if p, ok := ec.ips[id]; ok {
+		return p, nil
+	}
+	p, err := st.GetInterestPoint(ctx, agentID, id)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		ec.ips[id] = p
+	}
+	return p, nil
+}
+
+// page loads a wiki page once per request, reusing the cache on repeat ids.
+func (ec *entityCache) page(ctx context.Context, agentID, id string, st Store) (*store.Page, error) {
+	if p, ok := ec.pgs[id]; ok {
+		return p, nil
+	}
+	p, err := st.GetPage(ctx, agentID, id)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		ec.pgs[id] = p
+	}
+	return p, nil
+}
+
 // New builds the recall service. Pass an optional NamespaceResolver to enable
 // cross-namespace reads (results get annotated with their source namespace);
 // with no resolver the service reads only the agent's own namespace (isolated).
@@ -516,8 +559,9 @@ func (s *service) Search(ctx context.Context, agentID, query string, topK, maxBo
 		all = all[:topK]
 	}
 	var out []Result
+	ec := newEntityCache()
 	for _, h := range all {
-		r, err := s.resultFor(ctx, h.AgentID, h, maxBodyLen)
+		r, err := s.resultFor(ctx, h.AgentID, h, maxBodyLen, ec)
 		if err != nil {
 			return nil, err
 		}
@@ -569,7 +613,7 @@ func (s *service) GetByID(ctx context.Context, agentID, id string, maxBodyLen in
 		return nil, nil
 	}
 	for _, ns := range s.visible(ctx, agentID) {
-		r, err := s.getByIDIn(ctx, ns, id, maxBodyLen)
+		r, err := s.getByIDIn(ctx, ns, id, maxBodyLen, newEntityCache())
 		if err != nil {
 			return nil, err
 		}
@@ -584,7 +628,7 @@ func (s *service) GetByID(ctx context.Context, agentID, id string, maxBodyLen in
 }
 
 // getByIDIn resolves one entity within a single namespace.
-func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen int) (*Result, error) {
+func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen int, ec *entityCache) (*Result, error) {
 	if p, err := s.store.GetInterestPoint(ctx, agentID, id); err == nil && p != nil {
 		// Archived: surface the record itself with its status + replacement.
 		if p.Status == "archived" {
@@ -599,11 +643,11 @@ func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen 
 				Reliability: p.Reliability,
 				Freshness:   p.Freshness,
 			}
-			s.attachEdges(ctx, agentID, id, r)
+			s.attachEdges(ctx, agentID, id, r, ec)
 			s.attachReplacement(ctx, agentID, id, r)
 			return r, nil
 		}
-		return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "interest_point"}, maxBodyLen)
+		return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "interest_point"}, maxBodyLen, ec)
 	}
 	pg, err := s.store.GetPage(ctx, agentID, id)
 	if err != nil || pg == nil {
@@ -620,20 +664,23 @@ func (s *service) getByIDIn(ctx context.Context, agentID, id string, maxBodyLen 
 			Claims:    s.pageClaims(ctx, agentID, pg.ID),
 			Freshness: store.Freshness{Level: "unknown"},
 		}
-		s.attachEdges(ctx, agentID, id, r)
+		s.attachEdges(ctx, agentID, id, r, ec)
 		s.attachReplacement(ctx, agentID, id, r)
 		return r, nil
 	}
-	return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "wiki_page"}, maxBodyLen)
+	return s.resultFor(ctx, agentID, vec.Hit{ID: id, Kind: "wiki_page"}, maxBodyLen, ec)
 }
 
 // resultFor assembles one Result for a hit, attaching edges with far-end
 // titles. Archived/superseded entities without a live replacement are
 // filtered out; when a replacement exists the hit is silently substituted
 // with the successor page (design: silent replacement substitution).
-func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxBodyLen int) (*Result, error) {
+func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxBodyLen int, ec *entityCache) (*Result, error) {
+	if ec == nil {
+		ec = newEntityCache()
+	}
 	if h.Kind == "interest_point" {
-		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
+		p, err := ec.interestPoint(ctx, agentID, h.ID, s.store)
 		if err != nil || p == nil {
 			return nil, nil
 		}
@@ -649,11 +696,11 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 				Reliability: p.Reliability,
 				Freshness:   p.Freshness,
 			}
-			s.attachEdges(ctx, agentID, h.ID, r)
+			s.attachEdges(ctx, agentID, h.ID, r, ec)
 			return r, nil
 		}
 	} else {
-		pg, err := s.store.GetPage(ctx, agentID, h.ID)
+		pg, err := ec.page(ctx, agentID, h.ID, s.store)
 		if err != nil || pg == nil {
 			return nil, nil
 		}
@@ -667,7 +714,7 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 				Claims:    s.pageClaims(ctx, agentID, pg.ID),
 				Freshness: store.Freshness{Level: "unknown"},
 			}
-			s.attachEdges(ctx, agentID, h.ID, r)
+			s.attachEdges(ctx, agentID, h.ID, r, ec)
 			return r, nil
 		}
 	}
@@ -677,14 +724,17 @@ func (s *service) resultFor(ctx context.Context, agentID string, h vec.Hit, maxB
 		return nil, nil
 	}
 	if rep.Page != nil {
-		return s.resultFor(ctx, agentID, vec.Hit{ID: rep.Page.ID, Kind: "wiki_page", Score: h.Score}, maxBodyLen)
+		return s.resultFor(ctx, agentID, vec.Hit{ID: rep.Page.ID, Kind: "wiki_page", Score: h.Score}, maxBodyLen, ec)
 	}
-	return s.resultFor(ctx, agentID, vec.Hit{ID: rep.InterestPointID, Kind: "interest_point", Score: h.Score}, maxBodyLen)
+	return s.resultFor(ctx, agentID, vec.Hit{ID: rep.InterestPointID, Kind: "interest_point", Score: h.Score}, maxBodyLen, ec)
 }
 
 // attachEdges fills Outlinks/Backlinks, resolving the far-end title (page
 // Title or interest point Name) for each edge in batch rather than per edge.
-func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result) {
+func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result, ec *entityCache) {
+	if ec == nil {
+		ec = newEntityCache()
+	}
 	outs, _ := s.store.Outlinks(ctx, agentID, id)
 	ins, _ := s.store.Backlinks(ctx, agentID, id)
 
@@ -696,7 +746,7 @@ func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result
 	for _, e := range ins {
 		farIDs = append(farIDs, e.SourceID)
 	}
-	titles := s.resolveTitles(ctx, agentID, farIDs)
+	titles := s.resolveTitles(ctx, agentID, farIDs, ec)
 
 	for _, e := range outs {
 		r.Outlinks = append(r.Outlinks, EdgeRef{ID: e.TargetID, Title: titles[e.TargetID], Kind: e.Kind, Weight: e.Weight})
@@ -707,21 +757,35 @@ func (s *service) attachEdges(ctx context.Context, agentID, id string, r *Result
 }
 
 // resolveTitles maps entity ids to their display titles in one batch (interest
-// points win over pages on an id collision).
-func (s *service) resolveTitles(ctx context.Context, agentID string, ids []string) map[string]string {
+// points win over pages on an id collision). Batch results are memoized in the
+// entityCache so repeated attachEdges calls (across hits) share one query.
+func (s *service) resolveTitles(ctx context.Context, agentID string, ids []string, ec *entityCache) map[string]string {
 	out := make(map[string]string, len(ids))
 	if len(ids) == 0 {
 		return out
 	}
-	if ips, err := s.store.GetInterestPointsByIDs(ctx, agentID, ids); err == nil {
-		for _, p := range ips {
-			out[p.ID] = p.Name
+	var uncached []string
+	for _, id := range ids {
+		if t, ok := ec.titles[id]; ok {
+			out[id] = t
+		} else {
+			uncached = append(uncached, id)
 		}
 	}
-	if pgs, err := s.store.GetPagesByIDs(ctx, agentID, ids); err == nil {
+	if len(uncached) == 0 {
+		return out
+	}
+	if ips, err := s.store.GetInterestPointsByIDs(ctx, agentID, uncached); err == nil {
+		for _, p := range ips {
+			out[p.ID] = p.Name
+			ec.titles[p.ID] = p.Name
+		}
+	}
+	if pgs, err := s.store.GetPagesByIDs(ctx, agentID, uncached); err == nil {
 		for _, p := range pgs {
 			if _, ok := out[p.ID]; !ok {
 				out[p.ID] = p.Title
+				ec.titles[p.ID] = p.Title
 			}
 		}
 	}

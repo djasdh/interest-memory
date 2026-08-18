@@ -48,6 +48,78 @@ func TestRecallCachesAssembledContext(t *testing.T) {
 	}
 }
 
+type countingStore struct {
+	fake  *fakeStore
+	reads int
+}
+
+func (c *countingStore) GetInterestPoint(ctx context.Context, agentID, id string) (*store.InterestPoint, error) {
+	c.reads++
+	return c.fake.GetInterestPoint(ctx, agentID, id)
+}
+func (c *countingStore) GetInterestPointsByIDs(ctx context.Context, agentID string, ids []string) ([]store.InterestPoint, error) {
+	c.reads += len(ids)
+	return c.fake.GetInterestPointsByIDs(ctx, agentID, ids)
+}
+func (c *countingStore) GetPage(ctx context.Context, agentID, id string) (*store.Page, error) {
+	c.reads++
+	return c.fake.GetPage(ctx, agentID, id)
+}
+func (c *countingStore) GetPagesByIDs(ctx context.Context, agentID string, ids []string) ([]store.Page, error) {
+	c.reads += len(ids)
+	return c.fake.GetPagesByIDs(ctx, agentID, ids)
+}
+func (c *countingStore) ListClaims(ctx context.Context, agentID, id string) ([]store.Claim, error) {
+	return c.fake.ListClaims(ctx, agentID, id)
+}
+func (c *countingStore) Outlinks(ctx context.Context, agentID, sourceID string) ([]store.Edge, error) {
+	return c.fake.Outlinks(ctx, agentID, sourceID)
+}
+func (c *countingStore) Backlinks(ctx context.Context, agentID, targetID string) ([]store.Edge, error) {
+	return c.fake.Backlinks(ctx, agentID, targetID)
+}
+func (c *countingStore) ResolveReplacement(ctx context.Context, agentID, id string) (*store.Replacement, error) {
+	return c.fake.ResolveReplacement(ctx, agentID, id)
+}
+func (c *countingStore) SearchInterestPointsByKeywords(ctx context.Context, agentID, query string, limit int) ([]store.InterestPoint, error) {
+	return c.fake.SearchInterestPointsByKeywords(ctx, agentID, query, limit)
+}
+func (c *countingStore) SearchPagesByKeywords(ctx context.Context, agentID, query string, limit int) ([]store.Page, error) {
+	return c.fake.SearchPagesByKeywords(ctx, agentID, query, limit)
+}
+
+func TestSearchSharesEntityReads(t *testing.T) {
+	// Two distinct hits whose edges both point at the shared far-end page
+	// p-shared. Without the entityCache, attachEdges → resolveTitles re-reads
+	// p-shared's title for every hit (dedupeHits only dedupes hit entities,
+	// not edge targets).
+	st := &countingStore{fake: &fakeStore{
+		ips: map[string]*store.InterestPoint{
+			"a": {ID: "a", Name: "A", Summary: "s"},
+			"b": {ID: "b", Name: "B", Summary: "s"},
+		},
+		pgs: map[string]*store.Page{"p-shared": {ID: "p-shared", Title: "shared", Status: "active"}},
+		outs: map[string][]store.Edge{
+			"a": {{SourceID: "a", TargetID: "p-shared", Kind: store.EdgeHasPage, Weight: 1}},
+			"b": {{SourceID: "b", TargetID: "p-shared", Kind: store.EdgeHasPage, Weight: 1}},
+		},
+		ins: map[string][]store.Edge{"p-shared": {}},
+	}}
+	s := New(fakeEmbedder{}, &fakeVec{hits: []vec.Hit{
+		{ID: "a", AgentID: "a1", Kind: "interest_point", Score: 0.9},
+		{ID: "b", AgentID: "a1", Kind: "interest_point", Score: 0.8},
+	}}, st, &fakeGrader{})
+	if _, err := s.Search(context.Background(), "a1", "query", 2, 100); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	// Baseline (no cache): 2 × GetInterestPoint + 2 × batch title queries
+	// (each hitting p-shared) = 6 reads. With entityCache the second batch
+	// title query is served from cache → 4 reads.
+	if st.reads > 4 {
+		t.Errorf("store entity reads = %d, want ≤4 (shared far-end titles deduped)", st.reads)
+	}
+}
+
 type fakeEmbedder struct{}
 
 func (fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
