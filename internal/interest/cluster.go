@@ -17,10 +17,13 @@ type HistPoint struct {
 
 // Component is one connected component of similar points (the unit of V1.2's
 // per-group LLM adjudication). Members are current points (cluster leaders);
-// Hist are historical points similar to ≥1 member.
+// Hist are historical points similar to ≥1 member. MemberHist preserves the
+// per-member association (member topic → the historical points it is similar
+// to) so V1.2 can adjudicate each current↔historical pair explicitly.
 type Component struct {
-	Members []Point
-	Hist    []HistPoint
+	Members    []Point
+	Hist       []HistPoint
+	MemberHist map[string][]HistPoint
 }
 
 // ClusterResult is s2's output: connected components, isolated current points
@@ -161,12 +164,14 @@ func Cluster(ctx context.Context, agentID string, vi VectorIndex, st Store, pts 
 			}
 		}
 		var comp Component
+		comp.MemberHist = make(map[string][]HistPoint)
 		for _, i := range idx {
 			comp.Members = append(comp.Members, pts[i])
 		}
 		for _, i := range idx {
 			for _, e := range histOf[i] {
 				comp.Hist = append(comp.Hist, e.hp)
+				comp.MemberHist[pts[i].Candidate.Topic] = append(comp.MemberHist[pts[i].Candidate.Topic], e.hp)
 			}
 		}
 		comps = append(comps, comp)
