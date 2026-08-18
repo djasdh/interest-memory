@@ -179,7 +179,7 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	if s.embedder == nil || s.llm == nil || s.vec == nil {
 		return nil
 	}
-	pts, err := interest.DedupeMerge(ctx, agentID, s.embedder, s.llm, s.cfg.Fork.ClusterSim, cands)
+	pts, err := interest.DedupeMerge(ctx, agentID, s.embedder, s.llm, s.cfg.Fork.ClusterSim, s.cfg.Fork.MaxConcurrency, cands)
 	if err != nil {
 		return fmt.Errorf("service: dedupe-merge: %w", err)
 	}

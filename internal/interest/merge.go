@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 
 	"github.com/djasdh/interest-memory/internal/fork"
 	"github.com/djasdh/interest-memory/internal/llm"
@@ -46,9 +47,15 @@ type mergeCandidate struct {
 // for free, cluster remaining candidates by embedding similarity (> clusterSim
 // pairs), and ask the LLM once per cluster how to merge/keep its members.
 // Returns the merged interest points with their embeddings. Never persists.
-func DedupeMerge(ctx context.Context, agentID string, em Embedder, cl ClusterLLM, clusterSim float64, cands []fork.Candidate) ([]Point, error) {
+// Embedding and per-cluster LLM calls run in parallel (maxConc workers,
+// fail-fast on the first error), while the output order matches the serial
+// pipeline (input order / cluster order).
+func DedupeMerge(ctx context.Context, agentID string, em Embedder, cl ClusterLLM, clusterSim float64, maxConc int, cands []fork.Candidate) ([]Point, error) {
 	if clusterSim <= 0 {
 		clusterSim = 0.6
+	}
+	if maxConc <= 0 {
+		maxConc = 4
 	}
 	// ① string-level dedup (case/whitespace normalized).
 	deduped := dedupeCandidates(cands)
@@ -56,33 +63,88 @@ func DedupeMerge(ctx context.Context, agentID string, em Embedder, cl ClusterLLM
 		return nil, nil
 	}
 
-	// ② embed each surviving candidate once.
+	// ② embed each surviving candidate once, in parallel (index-preserving).
 	pts := make([]Point, len(deduped))
-	for i, c := range deduped {
-		v, err := em.Embed(ctx, candidateText(c))
+	if err := runParallel(ctx, len(deduped), maxConc, func(ctx context.Context, i int) error {
+		v, err := em.Embed(ctx, candidateText(deduped[i]))
 		if err != nil {
-			return nil, fmt.Errorf("interest: dedupe-merge embed: %w", err)
+			return fmt.Errorf("interest: dedupe-merge embed: %w", err)
 		}
-		pts[i] = Point{Candidate: c, Vec: v}
+		pts[i] = Point{Candidate: deduped[i], Vec: v}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	// ③ cluster by pairwise similarity > clusterSim.
 	clusters := connectedComponents(pts, clusterSim)
 
-	// ④ one LLM call per cluster; isolated points pass through unchanged.
-	var out []Point
-	for _, grp := range clusters {
+	// ④ one LLM call per cluster, in parallel; isolated points pass through
+	// unchanged. Results are index-preserved then concatenated in cluster
+	// order (identical to the serial version).
+	results := make([][]Point, len(clusters))
+	if err := runParallel(ctx, len(clusters), maxConc, func(ctx context.Context, i int) error {
+		grp := clusters[i]
 		if len(grp) == 1 {
-			out = append(out, grp[0])
-			continue
+			results[i] = []Point{grp[0]}
+			return nil
 		}
 		merged, err := mergeCluster(ctx, em, cl, grp)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, merged...)
+		results[i] = merged
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	var out []Point
+	for _, r := range results {
+		out = append(out, r...)
 	}
 	return out, nil
+}
+
+// runParallel invokes fn(i) for i in [0,n) with up to maxConc concurrent
+// workers, canceling the rest on the first error (fail-fast). Each fn receives
+// a context canceled as soon as any worker fails.
+func runParallel(ctx context.Context, n, maxConc int, fn func(ctx context.Context, i int) error) error {
+	if n == 0 {
+		return nil
+	}
+	if maxConc <= 0 {
+		maxConc = 4
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu    sync.Mutex
+		first error
+		wg    sync.WaitGroup
+	)
+	sem := make(chan struct{}, maxConc)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			if err := fn(ctx, i); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+					cancel()
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return first
 }
 
 // candidateText is the embeddable text for a candidate (topic + reason).
