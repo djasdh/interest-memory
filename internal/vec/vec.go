@@ -32,6 +32,11 @@ type VectorIndex interface {
 	// SearchByKeywords falls back to keyword matching (used when vectors
 	// are unavailable or query has no meaningful embedding).
 	SearchByKeywords(ctx context.Context, agentID, query string, topK int) ([]Hit, error)
+	// Get returns the stored entry (including its raw embedding vector) for
+	// one id, or nil when absent. Used to fetch historical vectors so the
+	// caller can recompute exact pairwise similarity instead of relying on
+	// Search's ranking scores.
+	Get(ctx context.Context, agentID, id string) (*Entry, error)
 	// Delete removes an entry by id.
 	Delete(ctx context.Context, agentID, id string) error
 	// Available reports whether the index is usable at all (vector search

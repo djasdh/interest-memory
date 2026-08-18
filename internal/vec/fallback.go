@@ -91,6 +91,10 @@ func (f *Fallback) SearchByKeywords(ctx context.Context, agentID, query string, 
 	return out, rows.Err()
 }
 
+// Get implements VectorIndex. The keyword fallback does not store vectors, so
+// it always returns nil, nil (no historical vector available to recall).
+func (f *Fallback) Get(ctx context.Context, agentID, id string) (*Entry, error) { return nil, nil }
+
 func (f *Fallback) Delete(ctx context.Context, agentID, id string) error {
 	_, err := f.db.ExecContext(ctx, `DELETE FROM vec_meta WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err

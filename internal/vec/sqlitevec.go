@@ -170,6 +170,54 @@ func (v *SQLiteVec) SearchByKeywords(ctx context.Context, agentID, query string,
 	return nil, nil
 }
 
+// Get implements VectorIndex: returns the stored entry for one id, decoding
+// the stored (L2-normalized) embedding blob back into a []float32. Returns
+// nil, nil when the id does not exist in either kind table.
+func (v *SQLiteVec) Get(ctx context.Context, agentID, id string) (*Entry, error) {
+	if !v.available {
+		return nil, nil
+	}
+	for _, kind := range []string{"interest_point", "wiki_page"} {
+		name := tableName(kind)
+		// Tolerate tables that were never created.
+		rows, err := v.db.QueryContext(ctx, fmt.Sprintf(
+			`SELECT id, agent_id, embedding FROM %s WHERE id = ? AND agent_id = ?`,
+			name), id, agentID)
+		if err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return nil, err
+		}
+		var eid, eagent string
+		var blob []byte
+		found := false
+		for rows.Next() {
+			if err := rows.Scan(&eid, &eagent, &blob); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			found = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		if len(blob)%4 != 0 {
+			return nil, fmt.Errorf("vec: get %s/%s: malformed embedding blob (%d bytes)", agentID, id, len(blob))
+		}
+		vecV := make([]float32, len(blob)/4)
+		for i := range vecV {
+			vecV[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
+		}
+		return &Entry{ID: eid, AgentID: eagent, Kind: kind, Vector: vecV}, nil
+	}
+	return nil, nil
+}
+
 // Delete implements VectorIndex.
 func (v *SQLiteVec) Delete(ctx context.Context, agentID, id string) error {
 	if !v.available {

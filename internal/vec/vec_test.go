@@ -124,6 +124,61 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+// TestGetReturnsVector covers the VectorIndex.Get contract: upsert then fetch
+// the raw embedding back (used by interest clustering to recompute similarity
+// against historical points). SQLiteVec stores vectors L2-normalized, so the
+// returned vector must compare equal to the stored (normalized) value and to a
+// freshly-normalized copy of the input — not necessarily the input itself.
+func TestGetReturnsVector(t *testing.T) {
+	v, _ := newVec(t)
+	ctx := context.Background()
+	e := Entry{
+		ID: "i1", AgentID: "ag", Kind: "interest_point",
+		Vector: []float32{3, 4, 0}, // L2 norm = 5
+	}
+	if err := v.Upsert(ctx, e); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := v.Get(ctx, "ag", "i1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get returned nil entry")
+	}
+	if got.ID != "i1" || got.AgentID != "ag" || got.Kind != "interest_point" {
+		t.Errorf("Get entry = %+v, want id/i1 agent/ag kind/interest_point", got)
+	}
+	if len(got.Vector) != 3 {
+		t.Fatalf("vector len = %d, want 3", len(got.Vector))
+	}
+	// {3,4,0} normalized → {0.6, 0.8, 0}.
+	want := []float32{0.6, 0.8, 0}
+	for i := range want {
+		if diff := absf(got.Vector[i] - want[i]); diff > 1e-5 {
+			t.Errorf("vector[%d] = %v, want %v (normalized)", i, got.Vector[i], want[i])
+		}
+	}
+}
+
+func TestGetMissingReturnsNil(t *testing.T) {
+	v, _ := newVec(t)
+	got, err := v.Get(context.Background(), "ag", "nope")
+	if err != nil {
+		t.Fatalf("Get missing: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Get missing = %+v, want nil", got)
+	}
+}
+
+func absf(f float32) float32 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
 func TestFallbackKeywords(t *testing.T) {
 	db, _ := sql.Open("sqlite3", ":memory:")
 	defer db.Close()
