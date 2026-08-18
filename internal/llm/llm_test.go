@@ -3,9 +3,11 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/djasdh/interest-memory/internal/config"
@@ -106,4 +108,108 @@ func TestEmbed(t *testing.T) {
 	if dim != 3 {
 		t.Errorf("Dimensions = %d, want 3", dim)
 	}
+}
+
+func TestEmbedCacheHitsSingle(t *testing.T) {
+	reqs := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3]}]}`))
+	}))
+	defer srv.Close()
+	e := NewEmbedder(config.EmbeddingConfig{BaseURL: srv.URL, APIKeyEnv: "IM_EMB_TEST_KEY", Model: "m", Dimensions: 3})
+	t.Setenv("IM_EMB_TEST_KEY", "k")
+
+	if _, err := e.Embed(context.Background(), "same text"); err != nil {
+		t.Fatalf("Embed 1: %v", err)
+	}
+	if _, err := e.Embed(context.Background(), "same text"); err != nil {
+		t.Fatalf("Embed 2: %v", err)
+	}
+	if reqs != 1 {
+		t.Errorf("embed requests = %d, want 1 (second call cached)", reqs)
+	}
+}
+
+func TestEmbedBatchPartialHits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embedRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		out := make([]map[string]any, len(req.Input))
+		for i := range req.Input {
+			out[i] = map[string]any{"embedding": []float32{0.5, 0.5, 0.5}}
+		}
+		data, _ := json.Marshal(map[string]any{"data": out})
+		w.Write(data)
+	}))
+	defer srv.Close()
+	e := NewEmbedder(config.EmbeddingConfig{BaseURL: srv.URL, APIKeyEnv: "IM_EMB_TEST_KEY", Model: "m", Dimensions: 3})
+	t.Setenv("IM_EMB_TEST_KEY", "k")
+
+	if _, err := e.Embed(context.Background(), "dup"); err != nil {
+		t.Fatalf("Embed dup: %v", err)
+	}
+	vecs, err := e.EmbedBatch(context.Background(), []string{"dup", "new"})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("len(vecs) = %d, want 2 (order preserved)", len(vecs))
+	}
+}
+
+func TestEmbedCacheInvalidatedByModel(t *testing.T) {
+	reqs := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3]}]}`))
+	}))
+	defer srv.Close()
+	e := NewEmbedder(config.EmbeddingConfig{BaseURL: srv.URL, APIKeyEnv: "IM_EMB_TEST_KEY", Model: "m1", Dimensions: 3})
+	t.Setenv("IM_EMB_TEST_KEY", "k")
+	if _, err := e.Embed(context.Background(), "x"); err != nil {
+		t.Fatalf("Embed m1: %v", err)
+	}
+	e.model = "m2" // simulate config change; cache key includes model → no hit
+	if _, err := e.Embed(context.Background(), "x"); err != nil {
+		t.Fatalf("Embed m2: %v", err)
+	}
+	if reqs != 2 {
+		t.Errorf("embed requests = %d, want 2 (model change invalidates cache)", reqs)
+	}
+}
+
+func TestEmbedBatchConcurrent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embedRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		out := make([]map[string]any, len(req.Input))
+		for i := range req.Input {
+			out[i] = map[string]any{"embedding": []float32{0.5, 0.5, 0.5}}
+		}
+		data, _ := json.Marshal(map[string]any{"data": out})
+		w.Write(data)
+	}))
+	defer srv.Close()
+	e := NewEmbedder(config.EmbeddingConfig{BaseURL: srv.URL, APIKeyEnv: "IM_EMB_TEST_KEY", Model: "m", Dimensions: 3})
+	t.Setenv("IM_EMB_TEST_KEY", "k")
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(base string) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				text := fmt.Sprintf("%s-%d", base, i)
+				if _, err := e.Embed(context.Background(), text); err != nil {
+					t.Errorf("Embed: %v", err)
+				}
+			}
+		}(string(rune('a' + g)))
+	}
+	wg.Wait()
 }
