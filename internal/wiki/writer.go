@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ type Writer struct {
 	runLoop      loopRunner
 	tracker      *usage.Tracker
 	verifyClaims bool
+	groupSimVal  float64
 }
 
 // NewWriter builds a Writer. deps carries store/vec/embedder/llm/searcher;
@@ -85,12 +87,16 @@ Link rules (mandatory):
 		timeout:      10 * time.Minute,
 		runLoop:      defaultRunLoop,
 		verifyClaims: verifyClaims,
+		groupSimVal:  0.75,
 	}
 }
 
 // SetTracker wires an optional usage tracker; per-turn token usage from the
 // agent loop is accumulated into it.
 func (w *Writer) SetTracker(t *usage.Tracker) { w.tracker = t }
+
+// SetGroupSim overrides the wikiloop clustering threshold (config wiki.group_sim).
+func (w *Writer) SetGroupSim(sim float64) { w.groupSimVal = sim }
 
 func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, tools []types.Tool, prompt types.Message, emit types.EventSink) error {
 	ag := agent.NewAgent(p)
@@ -100,12 +106,13 @@ func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, to
 	return err
 }
 
-// toolsFor builds the per-point tool set. The verify_claims (web fact-check)
+// toolsFor builds the per-cluster tool set. The verify_claims (web fact-check)
 // tool is omitted when verifyClaims is disabled so the model cannot trigger
 // network search.
 func (w *Writer) toolsFor(agentID string) []types.Tool {
 	tools := []types.Tool{
 		NewQueryTool(w.deps, agentID),
+		NewIPQueryTool(w.deps, agentID),
 		NewTagsTool(w.deps, agentID),
 	}
 	if w.verifyClaims {
@@ -124,10 +131,12 @@ func (w *Writer) toolsFor(agentID string) []types.Tool {
 // request rate/cost).
 const maxCompileConcurrency = 4
 
-// Compile writes one wiki page per interest point via dedicated agent loops,
-// run concurrently (bounded by maxCompileConcurrency). Each point's prompt
-// carries its evidence, the exact conversation segment (by TurnRange), and a
-// pre-looked-up related-page summary. Returns the page ids touched this run.
+// Compile groups the interest points into EBD clusters (grouping only — never
+// merges) and runs one wiki agent loop per cluster, plus one per isolated
+// point, concurrently (bounded by maxCompileConcurrency). Each cluster's prompt
+// presents all member points so the agent can decide a single-point page /
+// multi-point shared page / update existing / merge into a non-group page.
+// Returns the page ids touched this run.
 func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.InterestPoint, msgs []types.Message) ([]string, error) {
 	if w.prov == nil {
 		return nil, nil
@@ -140,18 +149,35 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 		return nil, nil
 	}
 
+	clusters, isolated, err := groupByCluster(ctx, w.deps, agentID, pts, w.groupSimVal)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: group: %w", err)
+	}
+
+	units := make([][]store.InterestPoint, 0, len(clusters)+len(isolated))
+	for _, c := range clusters {
+		us := make([]store.InterestPoint, len(c))
+		for i := range c {
+			us[i] = c[i].Pt
+		}
+		units = append(units, us)
+	}
+	for _, iso := range isolated {
+		units = append(units, []store.InterestPoint{iso.Pt})
+	}
+
 	tools := w.toolsFor(agentID)
-	results := make([]compileResult, len(pts))
+	results := make([]compileResult, len(units))
 	sem := make(chan struct{}, maxCompileConcurrency)
 	var wg sync.WaitGroup
-	for i, ip := range pts {
+	for i, unit := range units {
 		wg.Add(1)
-		go func(i int, ip store.InterestPoint) {
+		go func(i int, unit []store.InterestPoint) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results[i] = w.compileOne(ctx, agentID, p, tools, ip, msgs)
-		}(i, ip)
+			results[i] = w.compileCluster(ctx, agentID, p, tools, unit, msgs)
+		}(i, unit)
 	}
 	wg.Wait()
 
@@ -165,18 +191,20 @@ func (w *Writer) Compile(ctx context.Context, agentID string, pts []store.Intere
 	return touched, nil
 }
 
-// compileResult is one interest point's wiki-write outcome.
+// compileResult is one cluster's wiki-write outcome.
 type compileResult struct {
 	touched []string
 	err     error
 }
 
-// compileOne runs the agent loop for a single interest point, returning the
-// page ids it wrote (and, on failure, the first error).
-func (w *Writer) compileOne(ctx context.Context, agentID string, p *provider.Provider, tools []types.Tool, ip store.InterestPoint, msgs []types.Message) compileResult {
-	related := prelookupRelated(ctx, w.deps, agentID, ip)
-	dialog := dialogSegment(msgs, ip.TurnRange)
-	prompt := buildPointPrompt(ip, dialog, related, w.lang)
+// compileCluster runs one wikiloop for a cluster (or a single isolated point):
+// the prompt presents all member interest points so the agent can decide a
+// single-point page / multi-point shared page / update existing / merge into a
+// non-group page. The cluster's points share one conversation segment span.
+func (w *Writer) compileCluster(ctx context.Context, agentID string, p *provider.Provider, tools []types.Tool, unit []store.InterestPoint, msgs []types.Message) compileResult {
+	related := prelookupRelated(ctx, w.deps, agentID, unit[0])
+	dialog := dialogSpan(msgs, unit)
+	prompt := buildClusterPrompt(unit, dialog, related, w.lang)
 
 	var pointTouched []string
 	loopCtx, cancel := context.WithTimeout(ctx, w.timeout)
@@ -196,13 +224,76 @@ func (w *Writer) compileOne(ctx context.Context, agentID string, p *provider.Pro
 	})
 	cancel()
 	if err != nil {
-		return compileResult{err: fmt.Errorf("wiki: point %q: %w", ip.Name, err)}
+		return compileResult{err: fmt.Errorf("wiki: cluster %q: %w", unit[0].Name, err)}
 	}
-	// Backfill EventTime on pages the agent wrote without event_time.
-	if !ip.EventTime.IsZero() {
-		w.backfillEventTime(ctx, agentID, pointTouched, ip.EventTime)
+	// Backfill EventTime on pages the agent wrote without event_time, using the
+	// cluster's earliest event time.
+	var et time.Time
+	for _, ip := range unit {
+		if !ip.EventTime.IsZero() && (et.IsZero() || ip.EventTime.Before(et)) {
+			et = ip.EventTime
+		}
 	}
+	if !et.IsZero() {
+		w.backfillEventTime(ctx, agentID, pointTouched, et)
+	}
+	w.logSkippedPoints(ctx, agentID, unit, pointTouched)
 	return compileResult{touched: pointTouched}
+}
+
+// dialogSpan merges the TurnRange spans of all unit points into one continuous
+// segment (min start, max end), clamped to msgs.
+func dialogSpan(msgs []types.Message, unit []store.InterestPoint) string {
+	if len(unit) == 0 {
+		return ""
+	}
+	s, e := unit[0].TurnRange[0], unit[0].TurnRange[1]
+	for _, ip := range unit[1:] {
+		if ip.TurnRange[0] < s {
+			s = ip.TurnRange[0]
+		}
+		if ip.TurnRange[1] > e {
+			e = ip.TurnRange[1]
+		}
+	}
+	return dialogSegment(msgs, [2]int{s, e})
+}
+
+// logSkippedPoints records which group points (worth a page) the agent loop
+// did not attach to any written page, so misses can be revisited later
+// (v2 §3.4 漏写兜底).
+func (w *Writer) logSkippedPoints(ctx context.Context, agentID string, unit []store.InterestPoint, touched []string) {
+	if len(touched) == 0 {
+		return
+	}
+	touchedSet := map[string]bool{}
+	for _, id := range touched {
+		touchedSet[id] = true
+	}
+	pages, _ := w.deps.Store.InterestPointPages(ctx, agentID, idsOf(unit))
+	covered := map[string]bool{}
+	for _, r := range pages {
+		if touchedSet[r.PageID] {
+			covered[r.InterestPointID] = true
+		}
+	}
+	for _, ip := range unit {
+		if covered[ip.ID] {
+			continue
+		}
+		if ip.WikiWorthy != nil && !*ip.WikiWorthy {
+			continue
+		}
+		log.Printf("wiki: skipped write for interest point %q (%s) — not covered by pages %v", ip.Name, ip.ID, touched)
+	}
+}
+
+func idsOf(pts []store.InterestPoint) []string {
+	out := make([]string, len(pts))
+	for i := range pts {
+		out[i] = pts[i].ID
+	}
+	return out
 }
 
 // backfillEventTime stamps pages whose EventTime the agent omitted, using the
@@ -269,6 +360,73 @@ func buildPointPrompt(ip store.InterestPoint, dialog, related, lang string) stri
 		b.WriteString(related)
 	}
 	b.WriteString("\nFollow the workflow: wiki_query → draft → verify_claims (objective claims) → review → wiki_write (with interest_point_ids listing the interest point id(s) driving this page).\n")
+	b.WriteString(fmt.Sprintf("Write all page content (title, body, related links) in '%s'.\n", lang))
+	return b.String()
+}
+
+// buildClusterPrompt renders a clustered wikiloop prompt: it presents all
+// member interest points (with wiki_worthy hints) so the agent can decide a
+// single-point page / multi-point shared page / update existing / merge into a
+// non-group page. A single-point cluster reuses buildPointPrompt.
+func buildClusterPrompt(unit []store.InterestPoint, dialog, related, lang string) string {
+	if len(unit) == 1 {
+		return buildPointPrompt(unit[0], dialog, related, lang)
+	}
+	if lang == "" {
+		lang = "English"
+	}
+	var b strings.Builder
+	b.WriteString("Write or update wiki page(s) for the following interest point group.\n")
+	b.WriteString("These points are related and may share one page, or each may deserve its own. Decide: (a) write one page per point; (b) write ONE page covering multiple points (declare all driving interest point ids in interest_point_ids); (c) update an existing page; (d) merge content into a page that already exists in the wiki (found via wiki_query). Points marked wiki_worthy=false are related context — they may contribute content or stay as reference only.\n\n")
+	b.WriteString("## Interest points in this group\n")
+	for i, ip := range unit {
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, ip.Name))
+		if ip.Summary != "" {
+			b.WriteString(fmt.Sprintf("   Summary: %s\n", truncate(ip.Summary, 300)))
+		}
+		if len(ip.Keywords) > 0 {
+			b.WriteString(fmt.Sprintf("   Tags: %s\n", strings.Join(ip.Keywords, ", ")))
+		}
+		if ip.Reliability.Status != "" {
+			b.WriteString(fmt.Sprintf("   Reliability: %s (%.2f)\n", ip.Reliability.Status, ip.Reliability.Confidence))
+		}
+		if ip.WikiWorthy != nil && !*ip.WikiWorthy {
+			b.WriteString("   (wiki_worthy=false: related context, not required to have its own page)\n")
+		}
+		if !ip.EventTime.IsZero() {
+			b.WriteString(fmt.Sprintf("   Event time: %s\n", ip.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")))
+		}
+		b.WriteString("\n")
+	}
+	var evidenceShown bool
+	for _, ip := range unit {
+		if len(ip.Reliability.Evidence) == 0 {
+			continue
+		}
+		if !evidenceShown {
+			b.WriteString("\n## Evidence (cite sources when writing claims)\n")
+			evidenceShown = true
+		}
+		for _, e := range ip.Reliability.Evidence {
+			loc := e.SourceID
+			if e.URL != "" {
+				loc = e.URL
+			}
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Kind, truncate(loc, 200)))
+			if e.Excerpt != "" {
+				b.WriteString(fmt.Sprintf("  Quote: %s\n", truncate(e.Excerpt, 200)))
+			}
+		}
+	}
+	if dialog != "" {
+		b.WriteString("\n## Corresponding conversation segment (source turns)\n")
+		b.WriteString(dialog)
+	}
+	if related != "" {
+		b.WriteString("\n## Existing related pages (prefer updating rather than creating)\n")
+		b.WriteString(related)
+	}
+	b.WriteString("\nWorkflow: ip_query → wiki_query → draft → verify_claims (objective claims) → review → wiki_write (with interest_point_ids listing the driving point id(s)).\n")
 	b.WriteString(fmt.Sprintf("Write all page content (title, body, related links) in '%s'.\n", lang))
 	return b.String()
 }

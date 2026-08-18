@@ -77,24 +77,55 @@ func TestCompileRunsPerPointLoop(t *testing.T) {
 		return provider.NewConfiguredProvider(model, "test"), nil
 	}, "English", true)
 	w.runLoop = runner.run
+	w.deps = ToolsDeps{Store: deps.Store, Vec: deps.Vec, Embedder: namedEmbedder{}}
 
 	msgs := []types.Message{
 		{Role: types.RoleUser, Text: "我们用 PostgreSQL"},
 		{Role: types.RoleAssistant, Text: "好的"},
 	}
 	pts := []store.InterestPoint{
-		pt("ip-1", "PostgreSQL", "默认数据库", [2]int{0, 0}, nil),
-		pt("ip-2", "错误处理", "wrapped errors", [2]int{0, 0}, nil),
+		pt("ip-1", "alpha", "a1", [2]int{0, 0}, nil),
+		pt("ip-2", "beta", "b1", [2]int{0, 0}, nil),
 	}
 	touched, err := w.Compile(context.Background(), "agent-a", pts, msgs)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
+	// alpha and beta are orthogonal under namedEmbedder → two isolated loops.
 	if runner.calls != 2 {
-		t.Errorf("loop calls = %d, want 2 (one per interest point)", runner.calls)
+		t.Errorf("loop calls = %d, want 2 (two isolated points, one loop each)", runner.calls)
 	}
 	if len(touched) != 2 || touched[0] != "page-1" || touched[1] != "page-1" {
 		t.Errorf("touched = %v, want [page-1 page-1]", touched)
+	}
+}
+
+func TestCompileGroupsClustersPerLoop(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	runner := &fakeRunner{}
+	model := types.Model{ID: "m", BaseURL: "http://127.0.0.1:9/v1", API: provider.APIOpenAICompletions}
+	w := NewWriter(deps, func(context.Context) (*provider.Provider, error) {
+		return provider.NewConfiguredProvider(model, "test"), nil
+	}, "English", true)
+	w.runLoop = runner.run
+	w.deps = ToolsDeps{Store: deps.Store, Vec: deps.Vec, Embedder: namedEmbedder{}}
+
+	msgs := []types.Message{
+		{Role: types.RoleUser, Text: "alpha"},
+		{Role: types.RoleAssistant, Text: "ok"},
+	}
+	pts := []store.InterestPoint{
+		pt("ip-a", "alpha", "a1", [2]int{0, 0}, nil),
+		pt("ip-a2", "alpha2", "a2", [2]int{0, 0}, nil),
+		pt("ip-b", "beta", "b1", [2]int{0, 0}, nil),
+	}
+	if _, err := w.Compile(context.Background(), "agent-a", pts, msgs); err != nil {
+		t.Fatal(err)
+	}
+	// alpha+alpha2 share a vector → one cluster loop; beta is isolated → one
+	// loop. Total 2 loops (not 3 per-point).
+	if runner.calls != 2 {
+		t.Errorf("loop calls = %d, want 2 (1 cluster + 1 isolated)", runner.calls)
 	}
 }
 
