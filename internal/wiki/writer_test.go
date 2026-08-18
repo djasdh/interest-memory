@@ -192,3 +192,96 @@ func TestSetGroupSim(t *testing.T) {
 		t.Errorf("groupSimVal after SetGroupSim = %v, want 0.4", w.groupSimVal)
 	}
 }
+
+func TestLogSkippedPointsWritesMissAudit(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	w := &Writer{deps: deps}
+
+	worthy := func(id string) store.InterestPoint {
+		ip := pt(id, "P-"+id, "summary", [2]int{0, 0}, nil)
+		tru := true
+		ip.WikiWorthy = &tru
+		return ip
+	}
+	notWorthy := func(id string) store.InterestPoint {
+		ip := pt(id, "P-"+id, "summary", [2]int{0, 0}, nil)
+		fal := false
+		ip.WikiWorthy = &fal
+		return ip
+	}
+
+	// ip-covered is attached to the touched page → not a miss.
+	if err := st.UpsertPage(ctx, store.Page{ID: "written", AgentID: "agent-a", Title: "W", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-covered", TargetID: "written", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ip-miss is wiki_worthy but not covered by any touched page → miss.
+	// ip-low is wiki_worthy=false → no miss expected (related context only).
+	unit := []store.InterestPoint{worthy("ip-miss"), notWorthy("ip-low"), worthy("ip-covered")}
+	w.logSkippedPoints(ctx, "agent-a", unit, []string{"written"})
+
+	logs, err := st.ListLogs(ctx, "agent-a", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missLogs []store.ChangeLog
+	for _, l := range logs {
+		if l.Action == "wiki_write_miss" {
+			missLogs = append(missLogs, l)
+		}
+	}
+	if len(missLogs) != 1 {
+		t.Fatalf("wiki_write_miss logs = %d (%+v), want exactly 1 for ip-miss", len(missLogs), missLogs)
+	}
+	if missLogs[0].EntityID != "ip-miss" {
+		t.Errorf("miss log entity = %q, want ip-miss", missLogs[0].EntityID)
+	}
+}
+
+func TestAuditIdentityConsistencyFlagsSubjectiveInEntityPage(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	w := &Writer{deps: deps}
+
+	// entity page with a subjective (preference) related point folded in →
+	// identity mismatch, audit-logged.
+	if err := st.UpsertPage(ctx, store.Page{ID: "entity-page", AgentID: "agent-a", Title: "E", PageType: store.PageEntity, Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-subj", TargetID: "entity-page", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	subj := pt("ip-subj", "偏好", "喜欢 X", [2]int{0, 0}, nil)
+	subj.Subjective = true
+
+	// objective related point folded into a concept page → consistent.
+	if err := st.UpsertPage(ctx, store.Page{ID: "concept-page", AgentID: "agent-a", Title: "C", PageType: store.PageConcept, Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-obj", TargetID: "concept-page", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	obj := pt("ip-obj", "事实", "X 版本", [2]int{0, 0}, nil)
+	obj.Subjective = false
+
+	unit := []store.InterestPoint{subj, obj}
+	w.auditIdentityConsistency(ctx, "agent-a", unit, []string{"entity-page", "concept-page"})
+
+	logs, _ := st.ListLogs(ctx, "agent-a", 0, 0)
+	var mismatches []store.ChangeLog
+	for _, l := range logs {
+		if l.Action == "identity_mismatch" {
+			mismatches = append(mismatches, l)
+		}
+	}
+	if len(mismatches) != 1 {
+		t.Fatalf("identity_mismatch logs = %d (%+v), want exactly 1 (subjective in entity page)", len(mismatches), mismatches)
+	}
+	if mismatches[0].EntityID != "entity-page" {
+		t.Errorf("mismatch log entity = %q, want entity-page", mismatches[0].EntityID)
+	}
+}

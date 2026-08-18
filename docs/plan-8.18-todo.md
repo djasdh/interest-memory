@@ -3,12 +3,12 @@
 > **执行方式**：本文件是排期+执行契约；**T 组用现有计划** `docs/superpowers/plans/2026-08-18-token-cache-optimization.md`；**V 组每个子阶段实施前**，先用 superpowers:writing-plans 产出 task 级 TDD 计划（含失败测试→实现→验证→commit），再按 subagent-driven-development 或 executing-plans 执行。全部基于 main 分支。
 > **F 组已融合进 V 组**：F1(0.75) 内化为 V1.4 config 固化；F2/F3(full+full2 路线 + prompt 具体事实优化) 内化为 V-E；F4(judge 采样评测) 内化为 V4。
 > **执行者须知**：各阶段「关键接口契约」来自当前 main 分支源码调研（行号以调研时为准，实现时须复核）。下游阶段引用的签名必须与上游实际实现一致；不一致时以代码为准并回改本文件。
-> **进度**：✅ T 组、V-E、V1.1-V1.4 已完成并发布（v0.2.0/v0.2.1）；⬜ V2、V3、V4 待实施。
+> **进度**：✅ T 组、V-E、V1.1-V1.4 已完成并发布（v0.2.0/v0.2.1）；✅ V2 已完成并发布（v0.2.2）；✅ V3、V4（reconcile 收尾，评测跳过）已完成；
 
 ## 依赖链
 
 ```
-✅T1→T2→T3→T4→T5 → ✅V-E → ✅V1.1 → ✅V1.2 → ✅V1.3 → ✅V1.4 → ⬜V2 → ⬜V3 → ⬜V4
+✅T1→T2→T3→T4→T5 → ✅V-E → ✅V1.1 → ✅V1.2 → ✅V1.3 → ✅V1.4 → ✅V2 → ✅V3 → ✅V4
                   （V 组依赖 T2：embedding 内容缓存，T 组先行交付）
 ```
 
@@ -130,9 +130,11 @@ CGO_ENABLED=1 go test -race ./...
 
 ---
 
-# V2 wikiloop 编排（序 11）（并行）⬜ 待实施
+# V2 wikiloop 编排（序 11）（并行）✅ 已完成（v0.2.2）
 
 **目标**：wiki 写入从 per-point loop 改为 **EBD 簇分组**（每簇一个 loop，孤立单独 loop）；`wiki_write` 的 `interest_point_id` 单值→**数组**（多点 id，多对一 has_page）；新增 **IP_query** 工具。设计依据 v2 §3.4/§3.6。
+
+**实际 commit**：`cc795b1`（config group_sim）、`a8be9c4`（EBD 簇分组）、`0319ba8`（wiki_write 数组 id）、`9a32406`（ip_query）、`049b294`（簇 loop + 漏写日志）、`1c4da60`（reconcile 多对一 has_page 去重）、`631465a`（gofmt）、`74509a5`（changelog v0.2.2）。
 
 **前置**：✅ V1.4 已落地（裁决落库后进入 wikiloop；wikiloop 的 EBD 仅**分组**不再合并，v2 §3.4）。
 
@@ -155,9 +157,16 @@ CGO_ENABLED=1 go test -race ./...
 
 ---
 
-# V3 可信反向写回（序 12）（并行）⬜ 待实施
+# V3 可信反向写回（序 12）（并行）✅ 已完成
 
 **目标**：闭合可信流——wikiloop 写页时做的 verify_claims/review 复核结果，经 `wiki_write` 落页后**反向写回** `has_page` 源兴趣点的 reliability/freshness，带 `AppendLog` 审计。v2 §3.5。
+
+**实际 commit**：`21faccc`（writeback + wiki_write 参数 + 单测）。
+
+**实施要点（实际实现）**：
+- `wiki_write` 新增可选参数：`reliability_status` / `confidence` / `freshness_level` / `ttl_days` / `evidence`。
+- `writebackReliability`：落页后按声明的多点 id 逐个回写；**evidence 追加**（`Kind: "web"`，`SourceID=evidence 字符串`）；未提供字段保留原值；归档/不存在点**跳过**；每次写回 `AppendLog(action="reliability_update")`。
+- 无写回参数时零副作用（现有行为不变）。
 
 **前置**：V2（多点 id 声明已就绪）。
 
@@ -186,9 +195,16 @@ CGO_ENABLED=1 go test -race ./...
 
 ---
 
-# V4 reconcile 收尾 + 评测（序 13）⬜ 待实施
+# V4 reconcile 收尾（序 13）✅ 已完成（评测按用户决定跳过）
 
-**目标**：reconcile 兼容多对一 has_page 的 cascade 语义（v2 §8 风险 8/9 兜底）；产出 judge 3 次采样评测脚本并端到端实证（F4 内化）。
+**目标**：reconcile 兼容多对一 has_page 的 cascade 语义（v2 §8 风险 8/9 兜底）。**评测（F4/judge 3 次采样）用户决定跳过**，未实施。
+
+**实际 commit**：`<V4-commit>`。
+
+**实施要点（实际实现）**：
+- **风险 9 漏写补写**：`logSkippedPoints` 从纯 stdout 升级为结构化 `AppendLog(action="wiki_write_miss")`（wiki_worthy=true 但未被任何 touched 页覆盖的点），可追踪可补写。
+- **风险 8 身份一致性抽查**：新增 `auditIdentityConsistency`——主观（subjective）兴趣点被折进 entity/source 类型页时记录 `identity_mismatch` 日志；只读检查不改写。
+- 多对一 has_page 的 cascade 语义在 V2 已适配（`1c4da60`），本阶段回归保证。
 
 **前置**：V2/V3 全部落地。
 

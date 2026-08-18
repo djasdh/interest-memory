@@ -241,6 +241,7 @@ func (w *Writer) compileCluster(ctx context.Context, agentID string, p *provider
 		w.backfillEventTime(ctx, agentID, pointTouched, et)
 	}
 	w.logSkippedPoints(ctx, agentID, unit, pointTouched)
+	w.auditIdentityConsistency(ctx, agentID, unit, pointTouched)
 	return compileResult{touched: pointTouched}
 }
 
@@ -264,7 +265,9 @@ func dialogSpan(msgs []types.Message, unit []store.InterestPoint) string {
 
 // logSkippedPoints records which group points (worth a page) the agent loop
 // did not attach to any written page, so misses can be revisited later
-// (v2 §3.4 漏写兜底).
+// (v2 §3.4 漏写兜底). Misses are persisted as structured change_log entries
+// (action=wiki_write_miss) so they are traceable and re-runnable, not just
+// stdout noise.
 func (w *Writer) logSkippedPoints(ctx context.Context, agentID string, unit []store.InterestPoint, touched []string) {
 	if len(touched) == 0 {
 		return
@@ -288,7 +291,59 @@ func (w *Writer) logSkippedPoints(ctx context.Context, agentID string, unit []st
 			continue
 		}
 		log.Printf("wiki: skipped write for interest point %q (%s) — not covered by pages %v", ip.Name, ip.ID, touched)
+		_ = w.deps.Store.AppendLog(ctx, store.ChangeLog{
+			AgentID: agentID, EntityKind: "interest_point", EntityID: ip.ID,
+			Title: ip.Name, Action: "wiki_write_miss",
+		})
 	}
+}
+
+// auditIdentityConsistency is the v2 §8 风险 8 check: a related interest point
+// that participates in a written page must not have an identity (subjective vs
+// objective) that contradicts the page type it was folded into. A subjective
+// (preference) point folded into an entity/source page is a mismatch worth
+// auditing. Read-only: mismatches are recorded as change_log entries
+// (action=identity_mismatch), never rewritten.
+func (w *Writer) auditIdentityConsistency(ctx context.Context, agentID string, unit []store.InterestPoint, touched []string) {
+	if len(touched) == 0 {
+		return
+	}
+	for _, ip := range unit {
+		if !ip.Subjective {
+			continue
+		}
+		pts, err := w.deps.Store.InterestPointPages(ctx, agentID, []string{ip.ID})
+		if err != nil {
+			continue
+		}
+		for _, r := range pts {
+			if !touchedContains(touched, r.PageID) {
+				continue
+			}
+			p, err := w.deps.Store.GetPage(ctx, agentID, r.PageID)
+			if err != nil || p == nil {
+				continue
+			}
+			// A subjective point driving an objective-typed page (entity or
+			// source) is an identity mismatch worth auditing.
+			if p.PageType == store.PageEntity || p.PageType == store.PageSource {
+				log.Printf("wiki: identity mismatch — subjective interest point %q (%s) folded into %s page %q", ip.Name, ip.ID, p.PageType, r.PageID)
+				_ = w.deps.Store.AppendLog(ctx, store.ChangeLog{
+					AgentID: agentID, EntityKind: "wiki_page", EntityID: r.PageID,
+					Title: p.Title, Action: "identity_mismatch",
+				})
+			}
+		}
+	}
+}
+
+func touchedContains(touched []string, id string) bool {
+	for _, t := range touched {
+		if t == id {
+			return true
+		}
+	}
+	return false
 }
 
 func idsOf(pts []store.InterestPoint) []string {
