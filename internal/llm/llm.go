@@ -80,6 +80,13 @@ func (c *Client) SetTracker(t *usage.Tracker) { c.tracker = t }
 // Model returns the configured model name.
 func (c *Client) Model() string { return c.model }
 
+// Retry policy for transient HTTP failures (status >= 500, network errors).
+// Applies to Chat (and thus ChatJSON); 4xx and decode errors are not retried.
+const (
+	maxRetries     = 3 // additional attempts after the first
+	retryBaseDelay = 200 * time.Millisecond
+)
+
 // Chat performs a non-streaming completion and returns the assistant text.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error) {
 	if req.Model == "" {
@@ -93,9 +100,36 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	var lastErr error
+	attempts := 1 + maxRetries
+	for i := 0; i < attempts; i++ {
+		text, retry, err := c.doChat(ctx, body)
+		if err == nil {
+			return text, nil
+		}
+		lastErr = err
+		if !retry {
+			return "", err
+		}
+		// Exponential backoff between attempts: base × 2^(attempt-1).
+		delay := retryBaseDelay << uint(i)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return "", lastErr
+}
+
+// doChat performs one HTTP round-trip. retry=true means the failure is
+// transient (5xx / network) and worth retrying; 4xx and decode/validation
+// failures are final.
+func (c *Client) doChat(ctx context.Context, body []byte) (string, bool, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -104,27 +138,32 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error) {
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("llm: request: %w", err)
+		// Network failure — transient, retry.
+		return "", true, fmt.Errorf("llm: request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return "", fmt.Errorf("llm: read: %w", err)
+		return "", true, fmt.Errorf("llm: read: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm: status %d: %s", resp.StatusCode, truncate(string(data), 300))
+		msg := fmt.Sprintf("llm: status %d: %s", resp.StatusCode, truncate(string(data), 300))
+		if resp.StatusCode >= 500 {
+			return "", true, fmt.Errorf("%s", msg)
+		}
+		return "", false, fmt.Errorf("%s", msg)
 	}
 
 	var cr ChatResponse
 	if err := json.Unmarshal(data, &cr); err != nil {
-		return "", fmt.Errorf("llm: decode: %w", err)
+		return "", false, fmt.Errorf("llm: decode: %w", err)
 	}
 	if cr.Error != nil {
-		return "", fmt.Errorf("llm: api error: %s", cr.Error.Message)
+		return "", false, fmt.Errorf("llm: api error: %s", cr.Error.Message)
 	}
 	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("llm: empty choices")
+		return "", false, fmt.Errorf("llm: empty choices")
 	}
 	if c.tracker != nil && cr.Usage != nil {
 		c.tracker.Add(usage.Usage{
@@ -133,7 +172,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error) {
 			CacheHit: int64(cr.Usage.PromptCacheHitTokens),
 		})
 	}
-	return cr.Choices[0].Message.Content, nil
+	return cr.Choices[0].Message.Content, false, nil
 }
 
 // ChatJSON asks the model to produce a JSON payload and unmarshals it into out.

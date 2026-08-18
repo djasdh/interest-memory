@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/djasdh/interest-memory/internal/config"
 )
@@ -76,6 +77,76 @@ func TestChatErrorStatus(t *testing.T) {
 	_, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil || !strings.Contains(err.Error(), "bad key") {
 		t.Errorf("err = %v, want bad key error", err)
+	}
+}
+
+func TestChatRetriesTransientErrors(t *testing.T) {
+	// First call returns 500, then succeeds. Chat must retry (exponential
+	// backoff) and return the eventual success.
+	reqs := 0
+	var mu sync.Mutex
+	times := make([]time.Time, 0, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reqs++
+		times = append(times, time.Now())
+		n := reqs
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":{"message":"boom"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+	c := New(testLLMConfig(srv.URL))
+	text, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if text != "ok" {
+		t.Errorf("text = %q, want ok", text)
+	}
+	mu.Lock()
+	n := reqs
+	mu.Unlock()
+	if n != 2 {
+		t.Errorf("requests = %d, want 2 (1 failure + 1 retry)", n)
+	}
+	// Exponential backoff: the retry must not happen immediately (>= base).
+	mu.Lock()
+	d := times[1].Sub(times[0])
+	mu.Unlock()
+	if d < retryBaseDelay {
+		t.Errorf("retry delay = %v, want >= %v (exponential backoff)", d, retryBaseDelay)
+	}
+}
+
+func TestChatGivesUpAfterMaxRetries(t *testing.T) {
+	// Server always 500 → retries exhaust, last error surfaces.
+	reqs := 0
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reqs++
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"boom"}}`))
+	}))
+	defer srv.Close()
+	c := New(testLLMConfig(srv.URL))
+	_, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	mu.Lock()
+	n := reqs
+	mu.Unlock()
+	// 1 initial + maxRetries retries.
+	if n != 1+maxRetries {
+		t.Errorf("requests = %d, want %d", n, 1+maxRetries)
 	}
 }
 
