@@ -114,24 +114,30 @@ func TestClusterConnectsToHistorical(t *testing.T) {
 }
 
 func TestClusterConflictsQueue(t *testing.T) {
-	// Current point M connects to two historical points H1, H2 that are NOT
-	// similar to each other → competing sub-groups {M,H1} and {M,H2} form a
-	// conflict queue.
-	pts := []Point{
-		{Candidate: mergeCand("M", 0.9), Vec: []float32{1, 0, 0}},
-	}
+	// User's example: current point a similar to a1 & b1; current point b
+	// similar to b1 & c1; a and b NOT similar to each other.
+	//  → two independent components {a,a1,b1} and {b,b1,c1}, sharing b1.
+	//  → one conflict queue of 2 components (b1 shared), pulled out of
+	//    Components. Ordered by b1↔leader affinity: b1-a (0.862) > b1-b
+	//    (0.814), so the a-component comes first.
+	a := Point{Candidate: mergeCand("a", 0.9), Vec: []float32{1, 0, 0}}
+	b := Point{Candidate: mergeCand("b", 0.85), Vec: []float32{0.4, 0.9, 0}}
+	pts := []Point{a, b}
 	cv := &clusterVec{
 		searches: map[string][]vec.Hit{
 			"ag|v1": {
-				{ID: "h1", AgentID: "ag", Kind: "interest_point", Score: 0.9},
-				{ID: "h2", AgentID: "ag", Kind: "interest_point", Score: 0.9},
+				{ID: "a1", AgentID: "ag", Kind: "interest_point", Score: 0.9},
+				{ID: "b1", AgentID: "ag", Kind: "interest_point", Score: 0.9},
+			},
+			"ag|v0": {
+				{ID: "b1", AgentID: "ag", Kind: "interest_point", Score: 0.9},
+				{ID: "c1", AgentID: "ag", Kind: "interest_point", Score: 0.9},
 			},
 		},
 		entries: map[string]*vec.Entry{
-			// H1, H2 both close to M (cos 0.9) but far from each other
-			// (cos 0.65 < 0.8).
-			"h1": {ID: "h1", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.9, 0.4, 0}},
-			"h2": {ID: "h2", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.9, -0.4, 0}},
+			"a1": {ID: "a1", AgentID: "ag", Kind: "interest_point", Vector: []float32{1, 0, 0}, Metadata: map[string]string{"title": "a1"}},
+			"b1": {ID: "b1", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.85, 0.5, 0}, Metadata: map[string]string{"title": "b1"}},
+			"c1": {ID: "c1", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.4, 0.9, 0}, Metadata: map[string]string{"title": "c1"}},
 		},
 	}
 	res, err := Cluster(context.Background(), "ag", cv, nil, pts, 0.75, 0.8)
@@ -143,21 +149,37 @@ func TestClusterConflictsQueue(t *testing.T) {
 	}
 	queue := res.Conflicts[0]
 	if len(queue) != 2 {
-		t.Fatalf("conflict sub-groups = %d, want 2 ({M,H1} and {M,H2})", len(queue))
+		t.Fatalf("conflict queue size = %d, want 2 components sharing b1", len(queue))
 	}
-	for _, g := range queue {
-		if len(g.Members) != 1 || g.Members[0].Candidate.Topic != "M" {
-			t.Errorf("sub-group = %+v, want leader M", g)
+	// Components pulled out: conflicted ones must not also appear as plain
+	// components.
+	if len(res.Components) != 0 {
+		t.Errorf("components = %+v, want empty (conflicted pulled out)", res.Components)
+	}
+	// Shared historical point b1 present in every queue component's Hist.
+	for _, comp := range queue {
+		found := false
+		for _, h := range comp.Hist {
+			if h.Pt.ID == "b1" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("component %+v missing shared b1 in Hist", comp)
 		}
 	}
-	// Both groups size 2 → order stable.
-	if len(res.Components) != 0 {
-		t.Errorf("components = %+v, want empty (conflicted groups pulled out)", res.Components)
+	// Order: b1-a affinity (0.862) > b1-b (0.814) → a-component first.
+	if queue[0].Members[0].Candidate.Topic != "a" {
+		t.Errorf("queue[0] leader = %q, want a (higher b1 affinity first)", queue[0].Members[0].Candidate.Topic)
+	}
+	if queue[1].Members[0].Candidate.Topic != "b" {
+		t.Errorf("queue[1] leader = %q, want b", queue[1].Members[0].Candidate.Topic)
 	}
 }
 
-func TestClusterNoConflictWhenHistSimilar(t *testing.T) {
-	// M close to H1, H2, and H1 close to H2 → single flat component, no queue.
+func TestClusterNoConflictWhenHistSameComponent(t *testing.T) {
+	// M similar to H1 and H2 → they form ONE component {M,H1,H2}, no conflict
+	// queue (a single current point may ride multiple historical points).
 	pts := []Point{
 		{Candidate: mergeCand("M", 0.9), Vec: []float32{1, 0}},
 	}
@@ -169,8 +191,8 @@ func TestClusterNoConflictWhenHistSimilar(t *testing.T) {
 			},
 		},
 		entries: map[string]*vec.Entry{
-			"h1": {ID: "h1", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.99, 0.1}},
-			"h2": {ID: "h2", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.95, 0.2}},
+			"h1": {ID: "h1", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.99, 0.1}, Metadata: map[string]string{"title": "h1"}},
+			"h2": {ID: "h2", AgentID: "ag", Kind: "interest_point", Vector: []float32{0.95, 0.2}, Metadata: map[string]string{"title": "h2"}},
 		},
 	}
 	res, err := Cluster(context.Background(), "ag", cv, nil, pts, 0.75, 0.8)
@@ -178,7 +200,7 @@ func TestClusterNoConflictWhenHistSimilar(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Conflicts) != 0 {
-		t.Errorf("conflicts = %+v, want none (H1≈H2)", res.Conflicts)
+		t.Errorf("conflicts = %+v, want none (H1,H2 ride one component)", res.Conflicts)
 	}
 	if len(res.Components) != 1 {
 		t.Fatalf("components = %d, want 1 flat component", len(res.Components))
@@ -186,5 +208,8 @@ func TestClusterNoConflictWhenHistSimilar(t *testing.T) {
 	comp := res.Components[0]
 	if len(comp.Hist) != 2 {
 		t.Errorf("hist = %d, want 2 (H1+H2 in same component)", len(comp.Hist))
+	}
+	if len(res.Isolated) != 0 {
+		t.Errorf("isolated = %+v, want none", res.Isolated)
 	}
 }

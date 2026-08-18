@@ -23,13 +23,11 @@ type Component struct {
 	Hist    []HistPoint
 }
 
-// size returns the total node count (members + hist) used to order conflict
-// queues smallest-first.
-func (c Component) size() int { return len(c.Members) + len(c.Hist) }
-
 // ClusterResult is s2's output: connected components, isolated current points
-// (no similar partner), and conflict queues — competing groups that share a
-// current point and must be adjudicated in order (smaller component first).
+// (no similar partner), and conflict queues — components that share a
+// historical point and must be adjudicated in order (highest shared-point
+// affinity first). Conflict components are removed from Components and appear
+// only in their queue.
 type ClusterResult struct {
 	Components []Component
 	Isolated   []Point
@@ -41,12 +39,13 @@ type ClusterResult struct {
 // points (> histSim, via vec.Search + vec.Get for the exact vector), then
 // group into connected components.
 //
-// A conflict arises when one current point M is similar to two or more
-// historical points H1, H2 that are NOT similar to each other: M cannot merge
-// into both, so the competing sub-groups {M,H1}, {M,H2} are pulled out of the
-// flat component list into a conflict queue (smaller component adjudicated
-// first). Everything else forms plain components; current points with no
-// similar partner at all are Isolated. Never persists and never calls the LLM.
+// A conflict arises when a historical point H is shared by two or more
+// components (each component's current-point leader is similar to H): the
+// components compete for H, so they are pulled out of the flat component list
+// into a conflict queue, ordered by H's affinity to each component's leader
+// (highest first — adjudicated first). Everything else forms plain components;
+// current points with no similar partner at all are Isolated. Never persists
+// and never calls the LLM.
 func Cluster(ctx context.Context, agentID string, vi VectorIndex, st Store, pts []Point, mergeSim, histSim float64) (ClusterResult, error) {
 	if mergeSim <= 0 {
 		mergeSim = 0.75
@@ -131,36 +130,15 @@ func Cluster(ctx context.Context, agentID string, vi VectorIndex, st Store, pts 
 		}
 	}
 
-	// Group histEdges per current point to detect conflicts.
+	// Group histEdges per current point (a current point rides all its
+	// similar historical points in one component).
 	histOf := make(map[int][]histEdge)
 	for _, e := range histEdges {
 		histOf[e.pt] = append(histOf[e.pt], e)
 	}
 
-	// Detect conflict current points: ≥2 historical neighbors that are not
-	// mutually similar. Their sub-groups are adjudicated separately.
-	conflicted := make(map[int]bool)
-	for i, edges := range histOf {
-		if len(edges) < 2 {
-			continue
-		}
-		// Two hist neighbors H1, H2 are "in conflict" if their own similarity
-		// is below histSim (they are not one same-topic group).
-		conflicted[i] = true
-		for a := 0; a < len(edges); a++ {
-			for b := a + 1; b < len(edges); b++ {
-				if cosine(edges[a].hp.Vec, edges[b].hp.Vec) > histSim {
-					// H1 and H2 are themselves similar → not a conflict, they
-					// belong to one group.
-					conflicted[i] = false
-					break
-				}
-			}
-		}
-	}
-
 	var res ClusterResult
-	// Build components from union-find roots.
+	// Connected components over current points.
 	groups := make(map[int][]int)
 	var order []int
 	for i := range pts {
@@ -171,22 +149,14 @@ func Cluster(ctx context.Context, agentID string, vi VectorIndex, st Store, pts 
 		groups[r] = append(groups[r], i)
 	}
 
+	var comps []Component
 	for _, r := range order {
 		idx := groups[r]
 		if len(idx) == 1 {
 			i := idx[0]
 			if len(histOf[i]) == 0 {
+				// Genuinely isolated: no current partner, no historical match.
 				res.Isolated = append(res.Isolated, pts[i])
-				continue
-			}
-			if conflicted[i] {
-				// Pull each {M,Hk} pair into one conflict queue instead of a
-				// single flat component.
-				var queue []Component
-				for _, e := range histOf[i] {
-					queue = append(queue, Component{Members: []Point{pts[i]}, Hist: []HistPoint{e.hp}})
-				}
-				res.Conflicts = append(res.Conflicts, queue)
 				continue
 			}
 		}
@@ -199,23 +169,73 @@ func Cluster(ctx context.Context, agentID string, vi VectorIndex, st Store, pts 
 				comp.Hist = append(comp.Hist, e.hp)
 			}
 		}
-		res.Components = append(res.Components, comp)
+		comps = append(comps, comp)
 	}
 
-	// Sort each conflict queue's sub-groups smallest-first (stable).
-	for i := range res.Conflicts {
-		sortComponentsBySize(res.Conflicts[i])
+	// Conflict detection: a historical point shared by ≥2 components means the
+	// components compete for it. Pull those components into a conflict queue
+	// (removed from the plain list) and order each queue by the affinity of the
+	// shared point to each component's leader — higher affinity adjudicated
+	// first.
+	histInComps := make(map[string][]int)
+	for ci, comp := range comps {
+		for _, h := range comp.Hist {
+			histInComps[h.Pt.ID] = append(histInComps[h.Pt.ID], ci)
+		}
+	}
+	used := make([]bool, len(comps))
+	for sharedID, ciList := range histInComps {
+		if len(ciList) < 2 {
+			continue
+		}
+		var sharedVec []float32
+		for _, ci := range ciList {
+			for _, h := range comps[ci].Hist {
+				if h.Pt.ID == sharedID {
+					sharedVec = h.Vec
+				}
+			}
+		}
+		var queue []Component
+		for _, ci := range ciList {
+			if used[ci] {
+				continue
+			}
+			used[ci] = true
+			queue = append(queue, comps[ci])
+		}
+		if len(queue) >= 2 {
+			sortConflictQueue(queue, sharedVec)
+			res.Conflicts = append(res.Conflicts, queue)
+		}
+	}
+	for ci, comp := range comps {
+		if !used[ci] {
+			res.Components = append(res.Components, comp)
+		}
 	}
 	return res, nil
 }
 
-// sortComponentsBySize orders components smallest-first (stable for equal
-// sizes, preserving insertion order). The user's rule: smaller cluster is
-// adjudicated first.
-func sortComponentsBySize(comps []Component) {
-	for i := 1; i < len(comps); i++ {
-		for j := i; j > 0 && comps[j-1].size() > comps[j].size(); j-- {
-			comps[j-1], comps[j] = comps[j], comps[j-1]
+// affinityOf returns the highest similarity between a shared historical vector
+// and any current-point (leader) vector in the component.
+func affinityOf(comp Component, sharedVec []float32) float64 {
+	best := -1.0
+	for _, m := range comp.Members {
+		if s := cosine(m.Vec, sharedVec); s > best {
+			best = s
+		}
+	}
+	return best
+}
+
+// sortConflictQueue orders a conflict queue by each component's affinity to
+// the shared historical point, highest first (the component whose leader is
+// closest to the shared point is adjudicated first). Stable for ties.
+func sortConflictQueue(queue []Component, sharedVec []float32) {
+	for i := 1; i < len(queue); i++ {
+		for j := i; j > 0 && affinityOf(queue[j-1], sharedVec) < affinityOf(queue[j], sharedVec); j-- {
+			queue[j-1], queue[j] = queue[j], queue[j-1]
 		}
 	}
 }
