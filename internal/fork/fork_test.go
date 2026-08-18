@@ -478,7 +478,7 @@ func TestSummarize(t *testing.T) {
 		{Role: "system", Content: "ignored"},
 		{Role: "user", Content: ""}, // empty skipped
 	}
-	got := summarize(msgs)
+	got := summarize(msgs, false)
 	if got == "" {
 		t.Fatal("summarize returned empty")
 	}
@@ -489,6 +489,28 @@ func TestSummarize(t *testing.T) {
 	}
 	if contains(got, "[SYSTEM]") || contains(got, "[USER]: ignored") {
 		t.Errorf("summarize should skip system/empty messages\n---\n%s", got)
+	}
+}
+
+func TestSummarizeIncludeTool(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "let me check"},
+		{Role: "tool", Content: "result: 42"},
+		{Role: "assistant", Content: "ok"},
+	}
+	// 压缩模式：跳过 tool。
+	compressed := summarize(msgs, false)
+	if contains(compressed, "result: 42") {
+		t.Errorf("compressed render should skip tool output\n---\n%s", compressed)
+	}
+	if !contains(compressed, "[USER]: hi") || !contains(compressed, "[ASSISTANT]: let me check") {
+		t.Errorf("compressed render missing user/assistant\n---\n%s", compressed)
+	}
+	// 不压缩模式：含 tool，且编号纳入 tool 消息。
+	full := summarize(msgs, true)
+	if !contains(full, "[TOOL]: result: 42") {
+		t.Errorf("full render should include tool output\n---\n%s", full)
 	}
 }
 

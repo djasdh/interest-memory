@@ -254,7 +254,8 @@ type result struct {
 // filters low-confidence results (design: confidence ≥ 0.3 filter) and caps
 // the window at max_candidates_per_window.
 func (a *Analyzer) extract(ctx context.Context, turns []llm.Message) ([]Candidate, error) {
-	snapshot := summarize(turns)
+	includeTool := a.route == "prefix"
+	snapshot := summarize(turns, includeTool)
 	if snapshot == "" {
 		return nil, nil
 	}
@@ -292,7 +293,7 @@ Return ONLY valid JSON, no other text.`, factCategories, wikiWorthyClause(a.sele
 	var filtered []Candidate
 	for _, c := range cands {
 		if c.Confidence >= a.minConfidence {
-			filtered = append(filtered, mapTurnRange(c, renderIndices(turns)))
+			filtered = append(filtered, mapTurnRange(c, renderIndices(turns, includeTool)))
 		}
 	}
 	if a.maxCandidates > 0 && len(filtered) > a.maxCandidates {
@@ -307,7 +308,7 @@ Return ONLY valid JSON, no other text.`, factCategories, wikiWorthyClause(a.sele
 // merges both passes via dedupe. Same confidence filter, turn-range mapping,
 // and per-window cap as extract.
 func (a *Analyzer) extractAdditional(ctx context.Context, turns []llm.Message, first []Candidate) ([]Candidate, error) {
-	snapshot := summarize(turns)
+	snapshot := summarize(turns, false)
 	if snapshot == "" {
 		return nil, nil
 	}
@@ -346,7 +347,7 @@ Return ONLY valid JSON, no other text.`, strings.Join(existing, "\n"), factCateg
 	var filtered []Candidate
 	for _, c := range cands {
 		if c.Confidence >= a.minConfidence {
-			filtered = append(filtered, mapTurnRange(c, renderIndices(turns)))
+			filtered = append(filtered, mapTurnRange(c, renderIndices(turns, false)))
 		}
 	}
 	if a.maxCandidates > 0 && len(filtered) > a.maxCandidates {
@@ -377,14 +378,15 @@ When identifying topics, prefer CONCRETE FACTS over vague summaries — especial
 Include these details directly in the "topic" and "reason" fields.`
 
 // renderIndices returns the global message indexes that summarize() renders,
-// in order — i.e. non-empty user/assistant messages. The extraction prompt's
-// turn numbers are 1-based positions in this sequence; candidates' TurnRange
-// must be mapped back to global indexes so downstream code can slice the
-// transcript for the exact conversation segment.
-func renderIndices(turns []llm.Message) []int {
+// in order — i.e. non-empty user/assistant messages (and tool messages when
+// includeTool). The extraction prompt's turn numbers are 1-based positions in
+// this sequence; candidates' TurnRange must be mapped back to global indexes
+// so downstream code can slice the transcript for the exact conversation
+// segment.
+func renderIndices(turns []llm.Message, includeTool bool) []int {
 	var idx []int
 	for i, m := range turns {
-		if m.Role != "user" && m.Role != "assistant" {
+		if m.Role != "user" && m.Role != "assistant" && !(includeTool && m.Role == "tool") {
 			continue
 		}
 		if strings.TrimSpace(m.Content) == "" {
@@ -490,13 +492,13 @@ func containsString(s []string, v string) bool {
 }
 
 // summarize renders the window for the extraction prompt: user/assistant
-// text content, numbered as turns from 1 (adaptation of my-agent-core's
-// summarizeMessagesForInterest to llm.Message).
+// text content (and tool output when includeTool), numbered as turns from 1.
 //
-// The WHOLE window is rendered (no tail truncation) so that for prefix
-// windows the rendered text of window k is a strict prefix of window k+1 —
-// required for LLM provider prompt prefix caching to hit.
-func summarize(turns []llm.Message) string {
+// For prefix windows (includeTool=false) the rendered text of window k must be
+// a strict prefix of window k+1 — required for LLM provider prompt prefix
+// caching to hit. includeTool=true is used by non-prefix/full routes where
+// windows are not prefix chains and tool context is retained.
+func summarize(turns []llm.Message, includeTool bool) string {
 	var b strings.Builder
 	turnNum := 1
 	for _, m := range turns {
@@ -509,8 +511,14 @@ func summarize(turns []llm.Message) string {
 			b.WriteString(fmt.Sprintf("Turn %d [USER]: %s\n", turnNum, text))
 		case "assistant":
 			b.WriteString(fmt.Sprintf("Turn %d [ASSISTANT]: %s\n", turnNum, text))
+		case "tool":
+			if includeTool {
+				b.WriteString(fmt.Sprintf("Turn %d [TOOL]: %s\n", turnNum, text))
+			} else {
+				continue
+			}
 		default:
-			continue // system / tool roles are not interest-bearing
+			continue // system roles are not interest-bearing
 		}
 		turnNum++
 	}
