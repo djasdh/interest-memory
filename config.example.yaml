@@ -56,6 +56,7 @@ wiki:
   batch_size: 10                 # 协同 agent loop 每批相关页数（超过自动分批）| related pages per reconcile agent-loop batch (auto-batched when exceeded)
   language: English              # 页面输出语言（默认英文）| page output language (default English)
   verify_claims: true            # wiki agent 是否暴露 verify_claims（联网核查）工具；false 时模型无法触发联网 | expose the verify_claims (web fact-check) tool to the wiki agent; false removes it so the model cannot trigger network search
+  group_sim: 0.75                # wikiloop EBD 分组阈值（仅分组不合并；默认 0.75）| wikiloop EBD clustering threshold for write grouping (grouping only, no merge; default 0.75)
 
 # RAG 召回
 # RAG recall

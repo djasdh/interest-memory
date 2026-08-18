@@ -349,3 +349,26 @@ func TestForkRouteDefaultAndOverride(t *testing.T) {
 		t.Errorf("fork.route = %q, want full", cfg.Fork.Route)
 	}
 }
+
+func TestDefaultWikiGroupSim(t *testing.T) {
+	cfg := Default()
+	if cfg.Wiki.GroupSim != 0.75 {
+		t.Errorf("Wiki.GroupSim default = %v, want 0.75", cfg.Wiki.GroupSim)
+	}
+}
+
+func TestParseWikiGroupSim(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("wiki:\n  enabled: true\n  group_sim: 0.6\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Wiki.GroupSim != 0.6 {
+		t.Errorf("Wiki.GroupSim parsed = %v, want 0.6", cfg.Wiki.GroupSim)
+	}
+}

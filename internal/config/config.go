@@ -81,6 +81,10 @@ type WikiConfig struct {
 	// verify_claims (web fact-check) tool. false removes it so the model
 	// cannot trigger network search. Independent of verify.use_web_search.
 	VerifyClaims bool `yaml:"verify_claims"`
+	// GroupSim is the wikiloop EBD clustering threshold (pairs above it join a
+	// write cluster). Grouping only — never merges (merging already happened in
+	// V1.3 persist). Default 0.75.
+	GroupSim float64 `yaml:"group_sim"`
 }
 
 // OutputLanguage returns the configured wiki output language, defaulting to
@@ -207,6 +211,7 @@ func Default() Config {
 			MaxHops:      3,
 			BatchSize:    10,
 			VerifyClaims: true,
+			GroupSim:     0.75,
 		},
 		Worker: WorkerConfig{
 			// Default 45min: the wiki stage runs one agent loop per interest
