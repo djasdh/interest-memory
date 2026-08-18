@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/djasdh/interest-memory/internal/recall"
 	"github.com/djasdh/interest-memory/internal/store"
 	"github.com/djasdh/interest-memory/internal/vec"
-	"github.com/djasdh/interest-memory/internal/verify"
 	"github.com/djasdh/interest-memory/internal/wiki"
 
 	"github.com/djasdh/my-agent-core/types"
@@ -52,35 +52,6 @@ func (f *captureRecall) GetByID(_ context.Context, _, _ string, _ int) (*recall.
 	return f.byID, nil
 }
 
-func TestPersistContradictionsLogsEdges(t *testing.T) {
-	st, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	svc := &Service{store: st, verify: &fakeVerifier{cons: []store.Contradiction{
-		{ID: "con1", LeftID: "c1", RightID: "c2", Description: "矛盾", Status: "open"},
-	}}}
-	pts := []store.InterestPoint{{ID: "ip1", Name: "A"}, {ID: "ip2", Name: "B"}}
-	claims := []store.Claim{{ID: "c1", PageID: "ip1", Text: "x"}, {ID: "c2", PageID: "ip2", Text: "y"}}
-	if err := svc.persistContradictions(context.Background(), "agent-a", pts, claims); err != nil {
-		t.Fatal(err)
-	}
-	logs, err := st.ListLogs(context.Background(), "agent-a", 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("logs = %d, want 1", len(logs))
-	}
-	if logs[0].Action != "edge_change" {
-		t.Errorf("log action = %q, want edge_change", logs[0].Action)
-	}
-	if len(logs[0].Edges) != 2 || logs[0].Edges[0].Kind != store.EdgeContradict {
-		t.Errorf("edges = %+v, want bidirectional contradicts", logs[0].Edges)
-	}
-}
-
 func TestServiceListLogsPassthrough(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -99,23 +70,6 @@ func TestServiceListLogsPassthrough(t *testing.T) {
 		t.Errorf("logs = %+v", got)
 	}
 }
-
-// fakeVerifier implements verify.Verifier for the contradiction-log test.
-type fakeVerifier struct{ cons []store.Contradiction }
-
-func (f *fakeVerifier) VerifyCandidates(context.Context, string, []fork.Candidate) ([]verify.Verified, error) {
-	return nil, nil
-}
-func (f *fakeVerifier) CheckClaims(context.Context, string, []store.InterestPoint) ([]store.Claim, error) {
-	return nil, nil
-}
-func (f *fakeVerifier) FlagContradictions(context.Context, string, []store.Claim) ([]store.Contradiction, error) {
-	return f.cons, nil
-}
-func (f *fakeVerifier) GradeForRecall(context.Context, string, []vec.Hit) ([]verify.Graded, error) {
-	return nil, nil
-}
-func (f *fakeVerifier) FeedbackWrite(context.Context, string, []vec.Hit) error { return nil }
 
 func TestSetCandidateEventTime(t *testing.T) {
 	svc := &Service{}
@@ -318,17 +272,6 @@ func (f *fakeFork) Analyze(context.Context, string, [][]llm.Message) ([]fork.Can
 	return f.cands, nil
 }
 
-type fakeCleaner struct {
-	pts      []store.InterestPoint
-	archived []string
-	calls    int
-}
-
-func (f *fakeCleaner) Clean(context.Context, string, []verify.Verified) ([]store.InterestPoint, []string, error) {
-	f.calls++
-	return f.pts, f.archived, nil
-}
-
 type fakeWiki struct {
 	touched    []string
 	reconciles []wiki.ReconcileInput
@@ -347,27 +290,60 @@ func (f *fakeWiki) ReconcileRelated(_ context.Context, _ string, in wiki.Reconci
 	return nil
 }
 
-// fakeDeleteVerifier reuses fakeVerifier but returns a delete-relation
-// verified candidate so the pipeline archives without creating points.
-type fakeDeleteVerifier struct{ fakeVerifier }
+// fakePipelineEmbedder implements interest.Embedder for the V1 pipeline.
+// Returns a constant vector so single-candidate sessions cluster as isolated
+// points (no LLM merge call) and land in the adjudication stage.
+type fakePipelineEmbedder struct{}
 
-func (f *fakeDeleteVerifier) VerifyCandidates(context.Context, string, []fork.Candidate) ([]verify.Verified, error) {
-	return []verify.Verified{{
-		Candidate:    fork.Candidate{Topic: "old-topic"},
-		Relation:     verify.RelationDelete,
-		RelationToID: "ip-old",
-	}}, nil
+func (fakePipelineEmbedder) Embed(context.Context, string) ([]float32, error) {
+	return []float32{1, 0}, nil
+}
+
+// fakePipelineLLM implements interest.ClusterLLM. Isolated-point calls expect
+// a meta verdict; component calls are not exercised in these tests.
+type fakePipelineLLM struct {
+	meta map[string]any
+}
+
+func (f *fakePipelineLLM) ChatJSON(_ context.Context, _ []llm.Message, out any) error {
+	b, err := json.Marshal(map[string]any{"meta": f.meta})
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
+}
+
+// newTestService builds a Service wired for the V1 pipeline with a real
+// store/vec and fake embedder/llm. Wiki is the caller's fake.
+func newTestService(t *testing.T, cfg config.Config, fw *fakeWiki) *Service {
+	t.Helper()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	vi, err := vec.NewSQLiteVec(st.DB(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vi.Available() {
+		t.Skip("sqlite-vec not available")
+	}
+	svc := &Service{
+		cfg:      cfg,
+		store:    st,
+		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t", Confidence: 0.9}}},
+		wiki:     fw,
+		embedder: fakePipelineEmbedder{},
+		llm:      &fakePipelineLLM{meta: map[string]any{"wiki_worthy": true}},
+		vec:      vi,
+	}
+	return svc
 }
 
 func TestProcessSessionWikiDisabledSkipsWikiStage(t *testing.T) {
 	fw := &fakeWiki{}
-	svc := &Service{
-		cfg:      config.Config{Wiki: config.WikiConfig{Enabled: false}},
-		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
-		verify:   &fakeDeleteVerifier{},
-		interest: &fakeCleaner{archived: []string{"ip-old"}},
-		wiki:     fw,
-	}
+	svc := newTestService(t, config.Config{Wiki: config.WikiConfig{Enabled: false}}, fw)
 	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
 		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
 	})
@@ -382,95 +358,65 @@ func TestProcessSessionWikiDisabledSkipsWikiStage(t *testing.T) {
 	}
 }
 
-func TestProcessSessionDeleteOnlyStillReconciles(t *testing.T) {
-	svc := &Service{
-		cfg:      config.Default(),
-		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "old-topic"}}},
-		verify:   &fakeDeleteVerifier{},
-		interest: &fakeCleaner{pts: nil, archived: []string{"ip-old"}},
-		wiki:     &fakeWiki{},
-	}
-	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
-		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
-	})
-	if err != nil {
-		t.Fatalf("ProcessSession: %v", err)
-	}
-	fw := svc.wiki.(*fakeWiki)
-	if len(fw.reconciles) == 0 {
-		t.Fatal("ReconcileRelated was never called for a delete-only session")
-	}
-	got := fw.reconciles[len(fw.reconciles)-1]
-	if len(got.ArchivedPoints) != 1 || got.ArchivedPoints[0] != "ip-old" {
-		t.Errorf("archived points = %+v, want [ip-old]", got.ArchivedPoints)
-	}
-}
-
-func TestProcessSessionNoOpReturnsEarly(t *testing.T) {
-	svc := &Service{
-		cfg:      config.Default(),
-		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
-		verify:   &fakeVerifier{},
-		interest: &fakeCleaner{pts: nil, archived: nil},
-		wiki:     &fakeWiki{},
-	}
-	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
-		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
-	})
-	if err != nil {
-		t.Fatalf("ProcessSession: %v", err)
-	}
-	fw := svc.wiki.(*fakeWiki)
-	if len(fw.reconciles) != 0 {
-		t.Errorf("reconcile called for no-op run: %+v", fw.reconciles)
-	}
-}
-
-func TestProcessSessionSelectiveFiltersNotWorthy(t *testing.T) {
-	f := false
+func TestProcessSessionPipelinePersistsAndCompiles(t *testing.T) {
 	fw := &fakeWiki{}
-	svc := &Service{
-		cfg:    config.Config{Wiki: config.WikiConfig{Enabled: true, Selective: true}},
-		fork:   &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
-		verify: &fakeVerifier{},
-		interest: &fakeCleaner{pts: []store.InterestPoint{
-			{ID: "ip-worthy", Name: "w"},
-			{ID: "ip-no", Name: "n", WikiWorthy: &f},
-		}},
-		wiki: fw,
-	}
+	svc := newTestService(t, config.Default(), fw)
 	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
 		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
 	})
 	if err != nil {
 		t.Fatalf("ProcessSession: %v", err)
 	}
+	// The candidate persisted as an interest point (isolated → create).
+	pts, err := svc.store.ListInterestPoints(context.Background(), "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pts) != 1 {
+		t.Fatalf("persisted points = %d, want 1", len(pts))
+	}
+	// Wiki stage received the final point and compiled it.
 	if fw.compiles != 1 {
-		t.Fatalf("Compile called %d times, want 1", fw.compiles)
+		t.Errorf("Compile called %d times, want 1", fw.compiles)
 	}
-	if len(fw.compiled) != 1 || fw.compiled[0].ID != "ip-worthy" {
-		t.Errorf("compiled = %+v, want only ip-worthy", fw.compiled)
+	if len(fw.compiled) != 1 || fw.compiled[0].ID != pts[0].ID {
+		t.Errorf("compiled = %+v, want the persisted point", fw.compiled)
+	}
+	// Reconcile ran with no archived points.
+	if len(fw.reconciles) != 1 {
+		t.Fatalf("ReconcileRelated called %d times, want 1", len(fw.reconciles))
+	}
+	if len(fw.reconciles[0].ArchivedPoints) != 0 {
+		t.Errorf("archived points = %+v, want none", fw.reconciles[0].ArchivedPoints)
 	}
 }
 
-func TestProcessSessionNonSelectivePassesAll(t *testing.T) {
-	f := false
+func TestProcessSessionNoEmbedderShortCircuits(t *testing.T) {
+	// embedder nil → V1 pipeline skipped, nothing persisted, wiki not called.
 	fw := &fakeWiki{}
-	svc := &Service{
-		cfg:      config.Config{Wiki: config.WikiConfig{Enabled: true}},
-		fork:     &fakeFork{cands: []fork.Candidate{{Topic: "t"}}},
-		verify:   &fakeVerifier{},
-		interest: &fakeCleaner{pts: []store.InterestPoint{{ID: "ip-no", Name: "n", WikiWorthy: &f}}},
-		wiki:     fw,
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	err := svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
+	t.Cleanup(func() { st.Close() })
+	svc := &Service{
+		cfg:   config.Default(),
+		store: st,
+		fork:  &fakeFork{cands: []fork.Candidate{{Topic: "t", Confidence: 0.9}}},
+		wiki:  fw,
+	}
+	err = svc.ProcessSession(context.Background(), "agent-a", store.Transcript{
 		SessionID: "s1", AgentID: "agent-a", TurnCount: 1, RawTurns: `[{"role":"user","content":"x"}]`,
 	})
 	if err != nil {
 		t.Fatalf("ProcessSession: %v", err)
 	}
-	if len(fw.compiled) != 1 || fw.compiled[0].ID != "ip-no" {
-		t.Errorf("compiled = %+v, want all points", fw.compiled)
+	if fw.compiles != 0 {
+		t.Errorf("Compile called %d times, want 0 (no embedder)", fw.compiles)
+	}
+	pts, _ := svc.store.ListInterestPoints(context.Background(), "agent-a")
+	if len(pts) != 0 {
+		t.Errorf("persisted points = %d, want 0 (no embedder)", len(pts))
 	}
 }
 

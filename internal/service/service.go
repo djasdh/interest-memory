@@ -33,15 +33,19 @@ const namespaceCacheTTL = 30 * time.Second
 // domain services together and exposes the operations the worker queue and
 // HTTP layer call.
 type Service struct {
-	cfg      config.Config
-	store    store.Store
-	fork     fork.ForkAnalyzer
-	verify   verify.Verifier
-	interest interest.Cleaner
-	wiki     wiki.Compiler
-	recall   recall.RecallService
-	usage    *usage.Tracker
-	mcp      *mcpclient.Manager
+	cfg    config.Config
+	store  store.Store
+	fork   fork.ForkAnalyzer
+	wiki   wiki.Compiler
+	recall recall.RecallService
+	usage  *usage.Tracker
+	mcp    *mcpclient.Manager
+	// embedder/llm drive the V1 unified-adjudication pipeline (s1→s2→V1.2→
+	// V1.3). Stored as interfaces so ProcessSession tests can inject fakes.
+	embedder interest.Embedder
+	llm      interest.ClusterLLM
+	// vec is the vector index used by s2 clustering (historical recall).
+	vec vec.VectorIndex
 }
 
 // New wires the domain services from config + infrastructure. extraWebTools
@@ -103,12 +107,13 @@ func New(
 		cfg:      cfg,
 		store:    st,
 		fork:     fork.NewAnalyzer(llmClient, cfg.Fork, cfg.Wiki.Selective),
-		verify:   verifier,
-		interest: interest.New(embedder, vi, st, cfg.Fork),
 		wiki:     writer,
 		recall:   recall.New(embedder, vi, st, verifier, buildNamespaceResolver(cfg, st)),
 		usage:    tracker,
 		mcp:      mcpMgr,
+		embedder: embedder,
+		llm:      llmClient,
+		vec:      vi,
 	}
 }
 
@@ -167,52 +172,58 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 	}
 	s.setCandidateEventTime(cands, t.SessionDate, t.ReceivedAt)
 
-	// 2. verify#1: fact-check + evidence
-	verified, err := s.verify.VerifyCandidates(ctx, agentID, cands)
-	if err != nil {
-		return fmt.Errorf("service: verify#1: %w", err)
+	// 2-5. V1 unified adjudication pipeline:
+	//   s1 dedupe-merge → s2 cluster → V1.2 adjudicate → V1.3 persist.
+	// Short-circuit when embedder/llm are absent (e.g. degraded startup) or
+	// the pipeline produces nothing to persist.
+	if s.embedder == nil || s.llm == nil || s.vec == nil {
+		return nil
 	}
-
-	// 3. interest: clean/dedup/merge/relate (archived ids feed reconcile)
-	pts, archived, err := s.interest.Clean(ctx, agentID, verified)
+	pts, err := interest.DedupeMerge(ctx, agentID, s.embedder, s.llm, s.cfg.Fork.ClusterSim, cands)
 	if err != nil {
-		return fmt.Errorf("service: interest: %w", err)
+		return fmt.Errorf("service: dedupe-merge: %w", err)
 	}
-	// Continue when only deletions happened: archived points still need to
-	// reach the reconcile stage (cascade-archive related pages). Pure no-op
-	// runs (nothing persisted, nothing archived) return early.
-	if len(pts) == 0 && len(archived) == 0 {
+	if len(pts) == 0 {
+		return nil
+	}
+	res, err := interest.Cluster(ctx, agentID, s.vec, s.store, pts, s.cfg.Fork.SimilarityMerge, s.cfg.Fork.HistSim)
+	if err != nil {
+		return fmt.Errorf("service: cluster: %w", err)
+	}
+	adj, err := interest.Adjudicate(ctx, agentID, s.embedder, s.llm, res, s.cfg.Fork.MaxConcurrency)
+	if err != nil {
+		return fmt.Errorf("service: adjudicate: %w", err)
+	}
+	if err := interest.Persist(ctx, agentID, s.store, s.vec, adj, s.cfg.Fork.SimilarityRelate); err != nil {
+		return fmt.Errorf("service: persist: %w", err)
+	}
+	if len(adj.FinalPoints) == 0 && len(adj.Archived) == 0 {
 		return nil
 	}
 
-	// 4. verify#2: claims + contradictions (contradictions persisted)
-	claims, err := s.verify.CheckClaims(ctx, agentID, pts)
-	if err != nil {
-		return fmt.Errorf("service: check claims: %w", err)
+	// Extract final interest points (create/update) for the wiki stage and
+	// archived historical point ids for reconcile. WikiWorthy was already
+	// decided by V1.2 adjudication, so no selective re-filtering is needed.
+	var finalPts []store.InterestPoint
+	for _, fp := range adj.FinalPoints {
+		if fp.Action == "create" || fp.Action == "update" {
+			finalPts = append(finalPts, fp.Point)
+		}
 	}
-	if err := s.persistContradictions(ctx, agentID, pts, claims); err != nil {
-		return fmt.Errorf("service: flag contradictions: %w", err)
+	var archived []string
+	for _, ap := range adj.Archived {
+		archived = append(archived, ap.Pt.ID)
+	}
+	if len(finalPts) == 0 && len(archived) == 0 {
+		return nil
 	}
 
 	// 5-8. wiki: per-interest-point agent-loop write + adjacency rebuild +
 	// related-page reconcile. Skipped entirely when wiki writing is disabled
-	// (config.Wiki.Enabled=false) — interest points and verify#2
-	// contradictions are still persisted.
+	// (config.Wiki.Enabled=false) — interest points are still persisted.
 	var touched []string
 	if s.cfg.Wiki.Enabled {
-		ptsForWiki := pts
-		if s.cfg.Wiki.Selective {
-			// Selective mode: only points the fork LLM judged worthy (nil =
-			// not judged → worthy) become wiki pages; the rest stay as
-			// interest-point-only records.
-			ptsForWiki = make([]store.InterestPoint, 0, len(pts))
-			for _, p := range pts {
-				if p.WikiWorthy == nil || *p.WikiWorthy {
-					ptsForWiki = append(ptsForWiki, p)
-				}
-			}
-		}
-		touched, err = s.wiki.Compile(ctx, agentID, ptsForWiki, msgs)
+		touched, err = s.wiki.Compile(ctx, agentID, finalPts, msgs)
 		if err != nil {
 			return fmt.Errorf("service: wiki compile: %w", err)
 		}
@@ -229,39 +240,6 @@ func (s *Service) ProcessSession(ctx context.Context, agentID string, t store.Tr
 		}, s.cfg.Wiki.MaxHops, s.cfg.Wiki.BatchSize); err != nil {
 			return fmt.Errorf("service: reconcile: %w", err)
 		}
-	}
-	return nil
-}
-
-// persistContradictions stores detected contradictions and the bidirectional
-// contradicts edges (pipeline step 4, stored in the contradictions table).
-func (s *Service) persistContradictions(ctx context.Context, agentID string, pts []store.InterestPoint, claims []store.Claim) error {
-	if len(claims) == 0 {
-		return nil
-	}
-	cons, err := s.verify.FlagContradictions(ctx, agentID, claims)
-	if err != nil {
-		return err
-	}
-	for _, c := range cons {
-		if err := s.store.UpsertContradiction(ctx, c); err != nil {
-			return err
-		}
-		if err := s.store.AddEdgePair(ctx, agentID, store.Edge{
-			SourceID: c.LeftID,
-			TargetID: c.RightID,
-			Kind:     store.EdgeContradict,
-			Weight:   1,
-		}); err != nil {
-			return err
-		}
-		_ = s.store.AppendLog(ctx, store.ChangeLog{
-			AgentID: agentID, EntityKind: "wiki_page", Action: "edge_change",
-			Edges: []store.LogEdge{
-				{Action: "add", SourceID: c.LeftID, TargetID: c.RightID, Kind: store.EdgeContradict, Weight: 1},
-				{Action: "add", SourceID: c.RightID, TargetID: c.LeftID, Kind: store.EdgeContradict, Weight: 1},
-			},
-		})
 	}
 	return nil
 }
