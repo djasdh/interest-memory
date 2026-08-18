@@ -26,7 +26,8 @@ type fakeVec struct {
 func (f *fakeVec) Search(_ context.Context, _ string, _ []float32, _ int) ([]vec.Hit, error) {
 	return f.hits, nil
 }
-func (f *fakeVec) Upsert(_ context.Context, _ vec.Entry) error { return nil }
+func (f *fakeVec) Get(context.Context, string, string) (*vec.Entry, error) { return nil, nil }
+func (f *fakeVec) Upsert(_ context.Context, _ vec.Entry) error             { return nil }
 func (f *fakeVec) Delete(_ context.Context, _ string, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil

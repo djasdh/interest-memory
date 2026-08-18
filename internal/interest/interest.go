@@ -21,6 +21,10 @@ type Embedder interface {
 // (implemented by vec.SQLiteVec / vec.Fallback).
 type VectorIndex interface {
 	Search(ctx context.Context, agentID string, q []float32, topK int) ([]vec.Hit, error)
+	// Get fetches the stored entry (including its raw embedding vector) for a
+	// historical id, so s2 can recompute exact pairwise similarity instead of
+	// trusting Search's ranking score.
+	Get(ctx context.Context, agentID, id string) (*vec.Entry, error)
 	Upsert(ctx context.Context, e vec.Entry) error
 	Delete(ctx context.Context, agentID, id string) error
 }
