@@ -26,6 +26,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Fork.MaxConcurrency != 4 {
 		t.Errorf("default fork max_concurrency = %d, want 4", cfg.Fork.MaxConcurrency)
 	}
+	if cfg.Fork.SimilarityMerge != 0.75 {
+		t.Errorf("default similarity_merge = %f, want 0.75", cfg.Fork.SimilarityMerge)
+	}
+	if cfg.Fork.ClusterSim != 0.6 {
+		t.Errorf("default cluster_sim = %f, want 0.6", cfg.Fork.ClusterSim)
+	}
+	if cfg.Fork.HistSim != 0.8 {
+		t.Errorf("default hist_sim = %f, want 0.8", cfg.Fork.HistSim)
+	}
 	if cfg.Embedding.Dimensions != 1024 {
 		t.Errorf("default dimensions = %d, want 1024", cfg.Embedding.Dimensions)
 	}

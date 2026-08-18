@@ -134,12 +134,18 @@ type EmbeddingConfig struct {
 type ForkConfig struct {
 	PrefixStep       int     `yaml:"prefix_step"`     // prefix-window step in user turns
 	MaxWindows       int     `yaml:"max_windows"`     // max prefix windows (keeps the longest N when exceeded)
-	MaxConcurrency   int     `yaml:"max_concurrency"` // window-extraction parallelism
+	MaxConcurrency   int     `yaml:"max_concurrency"` // window-extraction / adjudication parallelism
 	SimilarityMerge  float64 `yaml:"similarity_merge"`
 	SimilarityRelate float64 `yaml:"similarity_relate"`
 	ImportanceBoost  float64 `yaml:"importance_boost_per_seen"`
 	MaxCandidates    int     `yaml:"max_candidates_per_window"`
 	MinConfidence    float64 `yaml:"min_confidence"`
+	// ClusterSim is the s1 dedupe-merge clustering threshold: candidates whose
+	// pairwise embedding cosine exceeds it join a merge cluster (default 0.6).
+	ClusterSim float64 `yaml:"cluster_sim"`
+	// HistSim is the s2 threshold for a current point to pair with a
+	// historical interest point (default 0.8).
+	HistSim float64 `yaml:"hist_sim"`
 	// Route selects the extraction strategy:
 	//   "prefix"     prefix-window split, full render (incl. tool output)
 	//   "non_prefix" non-overlapping user-turn windows, compressed render
@@ -178,11 +184,13 @@ func Default() Config {
 			PrefixStep:       5,
 			MaxWindows:       8,
 			MaxConcurrency:   4,
-			SimilarityMerge:  0.85,
+			SimilarityMerge:  0.75,
 			SimilarityRelate: 0.50,
 			ImportanceBoost:  0.05,
 			MaxCandidates:    20,
 			MinConfidence:    0.3,
+			ClusterSim:       0.6,
+			HistSim:          0.8,
 			Route:            "full2",
 		},
 		Verify: VerifyConfig{
