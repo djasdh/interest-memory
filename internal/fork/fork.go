@@ -151,6 +151,40 @@ func SplitPrefixWindows(turns []llm.Message, userStep, maxWindows int) [][]llm.M
 	return out
 }
 
+// SplitNonPrefixWindows slices turns into fixed user-turn groups (every
+// userStep user turns), non-overlapping (unlike prefix windows). Each window
+// covers a distinct transcript segment; the last window carries the trailing
+// turns after the final step boundary.
+func SplitNonPrefixWindows(turns []llm.Message, userStep, maxWindows int) [][]llm.Message {
+	if userStep <= 0 {
+		userStep = 5
+	}
+	if len(turns) == 0 {
+		return nil
+	}
+	var pos []int
+	for i, m := range turns {
+		if m.Role == "user" {
+			pos = append(pos, i)
+		}
+	}
+	var out [][]llm.Message
+	start := 0
+	for k := userStep; k <= len(pos); k += userStep {
+		end := pos[k-1] + 1
+		out = append(out, turns[start:end])
+		start = end
+	}
+	// Trailing turns after the last user-step boundary.
+	if start < len(turns) {
+		out = append(out, turns[start:])
+	}
+	if maxWindows > 0 && len(out) > maxWindows {
+		out = out[len(out)-maxWindows:]
+	}
+	return out
+}
+
 func sameWindow(a, b []llm.Message) bool {
 	if len(a) != len(b) {
 		return false

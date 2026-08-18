@@ -30,7 +30,11 @@ fork:
   importance_boost_per_seen: 0.05  # 每次再见到时的 importance 增幅 | importance bump each time it is seen again
   max_candidates_per_window: 20
   min_confidence: 0.3              # 候选兴趣点置信度下限（对齐 my-agent-core 0.3 阈值）| min candidate confidence (aligned with my-agent-core 0.3)
-  route: prefix                # 提取路线：prefix=前缀窗并发提取（默认）| full=单窗口全量提取+full2 追加 | extraction route: prefix (default) | full (single window + append pass)
+  route: full2                 # 提取路线（默认 full2）| extraction route (default full2):
+                               #   prefix=前缀窗不压缩渲染（含工具）| prefix-window full render (incl. tool)
+                               #   non_prefix=非前缀多窗压缩渲染 | non-overlap windows compressed
+                               #   full=单窗口一轮压缩 | single window, one pass
+                               #   full2=单窗口两轮（全量+追加）压缩 | single window, two passes (full+append)
 
 # 纠错核查（verify#1）
 # Correction fact-check (verify#1)

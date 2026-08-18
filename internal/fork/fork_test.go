@@ -184,6 +184,37 @@ func TestSplitPrefixWindowsEmpty(t *testing.T) {
 	}
 }
 
+func TestSplitNonPrefixWindows(t *testing.T) {
+	// 12 user 回合、step 5 → [1..5],[6..10],[11..12]，互不重叠，末窗含尾部。
+	msgs := mixTurns("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l")
+	got := SplitNonPrefixWindows(msgs, 5, 8)
+	if len(got) != 3 {
+		t.Fatalf("windows = %d, want 3", len(got))
+	}
+	// 各窗口互不重叠（非前缀）：拼接应还原完整序列。
+	var joined []llm.Message
+	for _, w := range got {
+		joined = append(joined, w...)
+	}
+	if !reflect.DeepEqual(joined, msgs) {
+		t.Error("non-prefix windows should concatenate to the full transcript")
+	}
+	// 每窗 user 数 == userStep（除尾窗含剩余 2 个 user）。
+	wantUserCounts := []int{5, 5, 2}
+	for i, w := range got {
+		n := 0
+		for _, m := range w {
+			if m.Role == "user" {
+				n++
+			}
+		}
+		if n != wantUserCounts[i] {
+			t.Errorf("window %d user count = %d, want %d", i, n, wantUserCounts[i])
+		}
+	}
+	// 相邻窗口边界不重叠：窗 i 的起始索引 >= 窗 i-1 的结束索引（由拼接还原保证）。
+}
+
 func TestExtractParsesSubjective(t *testing.T) {
 	// mockLLM returns Candidate with Subjective set — proves the JSON round-trip
 	// and that Analyze passes it through.

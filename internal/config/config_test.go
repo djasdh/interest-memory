@@ -323,8 +323,8 @@ func TestForkRouteDefaultAndOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load('') error: %v", err)
 	}
-	if cfg.Fork.Route != "prefix" {
-		t.Errorf("default fork.route = %q, want prefix", cfg.Fork.Route)
+	if cfg.Fork.Route != "full2" {
+		t.Errorf("default fork.route = %q, want full2", cfg.Fork.Route)
 	}
 
 	dir := t.TempDir()
