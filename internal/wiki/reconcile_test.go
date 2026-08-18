@@ -231,3 +231,37 @@ func TestReconcileSilentWhenAllRelatedArchived(t *testing.T) {
 		t.Errorf("loop calls = %d, want 0 (all related archived → silent)", runner.calls)
 	}
 }
+
+func TestCollectRelatedDedupesMultiHasPage(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := deps.Store.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-1", AgentID: "agent-a", Name: "P1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.Store.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-2", AgentID: "agent-a", Name: "P2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.Store.UpsertPage(ctx, store.Page{ID: "shared-page", AgentID: "agent-a", Title: "Shared", BodyMD: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.Store.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-1", TargetID: "shared-page", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.Store.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-2", TargetID: "shared-page", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+	w := &Writer{deps: deps}
+	pages, err := w.collectRelated(ctx, "agent-a", []string{"ip-1", "ip-2"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, p := range pages {
+		if p.ID == "shared-page" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("shared-page appears %d times in related, want 1 (deduped multi-to-one)", count)
+	}
+}

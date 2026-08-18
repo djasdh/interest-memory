@@ -594,3 +594,26 @@ func TestListGraphIdCollisionPrefixes(t *testing.T) {
 		t.Errorf("ambiguous collided edge should be dropped, got %+v", g.Edges)
 	}
 }
+
+func TestNewWiresGroupSimIntoWriter(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	cfg := config.Default()
+	cfg.Wiki.GroupSim = 0.4
+	cfg.Wiki.Enabled = false // avoid provider calls; only wiring is under test
+	svc := New(cfg, st, nil, nil, nil)
+	if svc == nil {
+		t.Fatal("nil service")
+	}
+	w, ok := svc.wiki.(*wiki.Writer)
+	if !ok {
+		t.Fatalf("wiki is %T, want *wiki.Writer", svc.wiki)
+	}
+	if w.GroupSim() != 0.4 {
+		t.Errorf("writer groupSim = %v, want 0.4 (wired from config)", w.GroupSim())
+	}
+}

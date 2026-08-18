@@ -180,3 +180,15 @@ func TestCompileDialogsSliceByTurnRange(t *testing.T) {
 		t.Errorf("dialog segment = %q, want to start at u2 (global index 1..2)", got)
 	}
 }
+
+func TestSetGroupSim(t *testing.T) {
+	deps, _, _ := newTestDeps(t)
+	w := NewWriter(deps, nil, "English", true)
+	if w.groupSimVal != 0.75 {
+		t.Errorf("default groupSimVal = %v, want 0.75", w.groupSimVal)
+	}
+	w.SetGroupSim(0.4)
+	if w.groupSimVal != 0.4 {
+		t.Errorf("groupSimVal after SetGroupSim = %v, want 0.4", w.groupSimVal)
+	}
+}

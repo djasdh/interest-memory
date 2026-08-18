@@ -298,6 +298,9 @@ func (w *Writer) collectRelated(ctx context.Context, agentID string, seeds []str
 				continue
 			}
 			// Likely an interest point id — resolve concept pages via has_page.
+			// Multi-to-one has_page: several interest points may drive the same
+			// page; visited (keyed by page id) already dedupes, so the shared
+			// page is enqueued once.
 			outs, err := w.deps.Store.Outlinks(ctx, agentID, id)
 			if err != nil {
 				continue

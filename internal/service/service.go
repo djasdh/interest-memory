@@ -91,6 +91,7 @@ func New(
 	}
 
 	writer := wiki.NewWriter(wikiDeps, wikiProv, cfg.Wiki.OutputLanguage(), cfg.Wiki.VerifyClaims)
+	writer.SetGroupSim(cfg.Wiki.GroupSim)
 	writer.SetTracker(tracker)
 
 	return &Service{

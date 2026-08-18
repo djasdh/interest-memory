@@ -98,6 +98,9 @@ func (w *Writer) SetTracker(t *usage.Tracker) { w.tracker = t }
 // SetGroupSim overrides the wikiloop clustering threshold (config wiki.group_sim).
 func (w *Writer) SetGroupSim(sim float64) { w.groupSimVal = sim }
 
+// GroupSim returns the current wikiloop clustering threshold.
+func (w *Writer) GroupSim() float64 { return w.groupSimVal }
+
 func defaultRunLoop(ctx context.Context, p *provider.Provider, system string, tools []types.Tool, prompt types.Message, emit types.EventSink) error {
 	ag := agent.NewAgent(p)
 	ag.SystemPrompt = system
