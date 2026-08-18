@@ -2,7 +2,6 @@ package verify
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/djasdh/interest-memory/internal/vec"
@@ -102,26 +101,4 @@ func (s *service) loadEntity(ctx context.Context, agentID string, h vec.Hit) (ti
 		}
 	}
 	return pg.Title, best.Confidence, best.Status, best.Freshness.Level, pg.EventTime, false
-}
-
-// FeedbackWrite closes the loop: for each recalled interest-point hit, bump
-// seen_count / importance / freshness timestamps (write-back feedback loop).
-func (s *service) FeedbackWrite(ctx context.Context, agentID string, hits []vec.Hit) error {
-	for _, h := range hits {
-		if h.Kind != "interest_point" {
-			continue
-		}
-		p, err := s.store.GetInterestPoint(ctx, agentID, h.ID)
-		if err != nil || p == nil {
-			continue
-		}
-		p.SeenCount++
-		p.LastSeenAt = now()
-		p.Importance += 0.05
-		p.Freshness.UpdatedAt = now()
-		if err := s.store.UpsertInterestPoint(ctx, *p); err != nil {
-			return fmt.Errorf("verify: feedback write: %w", err)
-		}
-	}
-	return nil
 }

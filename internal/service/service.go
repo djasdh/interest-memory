@@ -69,17 +69,7 @@ func New(
 			_ = reg.Register(&mcpSearchTool{mgr: m, searchTool: cfg.MCP.SearchTool})
 		}
 	}
-	verifier := verify.New(llmClient, st, reg, vi, embedder, verify.Config{
-		UseWebSearch:   cfg.Verify.UseWebSearch,
-		SearchMax:      cfg.Verify.SearchMax,
-		WebTool:        cfg.Verify.WebTool,
-		LLM:            cfg.LLM,
-		MaxConcurrency: cfg.Verify.MaxConcurrency,
-		Language:       cfg.Wiki.OutputLanguage(),
-		MinConfidence:  cfg.Verify.MinConfidence,
-		SimThreshold:   cfg.Verify.SimThreshold,
-		MaxCandidates:  cfg.Verify.MaxCandidates,
-	})
+	verifier := verify.New(st)
 
 	wikiDeps := wiki.ToolsDeps{Store: st, Vec: vi, Embedder: embedder, Search: reg, LLM: llmClient}
 	wikiProv := func(context.Context) (*provider.Provider, error) {

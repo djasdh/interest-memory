@@ -335,6 +335,15 @@ func normalizeTopic(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(s)), " "))
 }
 
+func containsString(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // cosine returns cosine similarity of two vectors (0 for degenerate or
 // mismatched lengths).
 func cosine(a, b []float32) float64 {
