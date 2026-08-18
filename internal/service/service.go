@@ -84,11 +84,11 @@ func New(
 	// Change-log retention default from config (0 = unlimited).
 	_ = st.SetLogRetainDefault(context.Background(), cfg.Log.Retain)
 
-	// Global token-usage tracker: each delta is persisted to the store's
-	// per-day usage table via the flush callback.
+	// Global token-usage tracker: deltas are aggregated in memory and flushed
+	// to the store's per-day usage table every 5s (batching SQLite writes).
 	tracker := usage.NewTracker(func(date string, u usage.Usage) error {
 		return st.AddUsage(context.Background(), date, u.Input, u.Output, u.CacheHit)
-	})
+	}, 5*time.Second)
 	if llmClient != nil {
 		llmClient.SetTracker(tracker)
 	}
@@ -112,10 +112,12 @@ func New(
 	}
 }
 
-// Close releases external resources (MCP server connections). Safe to call
-// once; the usage tracker persists eagerly on every Add, so no flush is
-// needed here.
+// Close releases external resources (MCP server connections) and flushes any
+// pending token-usage deltas. Safe to call once.
 func (s *Service) Close() {
+	if s.usage != nil {
+		s.usage.Close()
+	}
 	if s.mcp != nil {
 		s.mcp.Close()
 		s.mcp = nil

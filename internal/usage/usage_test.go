@@ -1,7 +1,9 @@
 package usage
 
 import (
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestTrackerAddAndPersist(t *testing.T) {
@@ -17,7 +19,8 @@ func TestTrackerAddAndPersist(t *testing.T) {
 		}
 		return nil
 	}
-	tr := NewTracker(persist)
+	tr := NewTracker(persist, 0)
+	defer tr.Close()
 	tr.Add(Usage{Input: 10, Output: 5, CacheHit: 3})
 	tr.Add(Usage{Input: 2, Output: 1})
 
@@ -35,9 +38,69 @@ func TestTrackerAddAndPersist(t *testing.T) {
 }
 
 func TestTrackerNoPersistDoesNotPanic(t *testing.T) {
-	tr := NewTracker(nil)
+	tr := NewTracker(nil, 0)
 	tr.Add(Usage{Input: 1})
 	if _, acc := tr.Today(); acc.Input != 1 {
 		t.Errorf("acc.Input = %d, want 1", acc.Input)
+	}
+}
+
+func TestTrackerFlushesAfterInterval(t *testing.T) {
+	var mu sync.Mutex
+	var persisted map[string]Usage
+	persist := func(date string, u Usage) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if persisted == nil {
+			persisted = map[string]Usage{}
+		}
+		prev := persisted[date]
+		persisted[date] = Usage{Input: prev.Input + u.Input, Output: prev.Output + u.Output, CacheHit: prev.CacheHit + u.CacheHit}
+		return nil
+	}
+	tr := NewTracker(persist, 20*time.Millisecond)
+	defer tr.Close()
+	tr.Add(Usage{Input: 10})
+	tr.Add(Usage{Input: 5})
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	got := persisted[todayKey()]
+	mu.Unlock()
+	if got.Input != 15 {
+		t.Errorf("persisted.Input = %d, want 15 (batched flush)", got.Input)
+	}
+}
+
+func TestTrackerSyncPersistWhenIntervalZero(t *testing.T) {
+	var persisted []Usage
+	persist := func(_ string, u Usage) error { persisted = append(persisted, u); return nil }
+	tr := NewTracker(persist, 0)
+	tr.Add(Usage{Input: 1})
+	if len(persisted) != 1 {
+		t.Errorf("persist calls = %d, want 1 (sync when interval <= 0)", len(persisted))
+	}
+}
+
+func TestTrackerCloseFlushesPending(t *testing.T) {
+	var mu sync.Mutex
+	var persisted map[string]Usage
+	persist := func(date string, u Usage) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if persisted == nil {
+			persisted = map[string]Usage{}
+		}
+		prev := persisted[date]
+		persisted[date] = Usage{Input: prev.Input + u.Input, Output: prev.Output + u.Output, CacheHit: prev.CacheHit + u.CacheHit}
+		return nil
+	}
+	tr := NewTracker(persist, 0)
+	tr.Add(Usage{Input: 7})
+	tr.Close()
+	mu.Lock()
+	got := persisted[todayKey()]
+	mu.Unlock()
+	if got.Input != 7 {
+		t.Errorf("persisted.Input = %d, want 7 (Close flushes)", got.Input)
 	}
 }
