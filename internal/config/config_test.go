@@ -317,3 +317,26 @@ server:
 		t.Errorf("unconfigured kanban_exclude = %v, want empty", cfg.InterestMemory.KanbanExclude)
 	}
 }
+
+func TestForkRouteDefaultAndOverride(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load('') error: %v", err)
+	}
+	if cfg.Fork.Route != "prefix" {
+		t.Errorf("default fork.route = %q, want prefix", cfg.Fork.Route)
+	}
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("fork:\n  route: full\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load(route=full) error: %v", err)
+	}
+	if cfg.Fork.Route != "full" {
+		t.Errorf("fork.route = %q, want full", cfg.Fork.Route)
+	}
+}

@@ -508,3 +508,115 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestAnalyzeFullRouteUsesSingleWindow(t *testing.T) {
+	// route=full：忽略传入 windows 的切分，强制单窗口（末窗=完整 transcript），
+	// 且只针对该窗口做 extract + extractAdditional 两次调用。
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "full-only", Confidence: 0.9}},
+		{{Topic: "full2-only", Confidence: 0.8}},
+	}}
+	cfg := analyzeCfg()
+	cfg.Route = "full"
+	a := NewAnalyzer(m, cfg, false)
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+		turnsFrom("one"),
+		turnsFrom("two"),
+		turnsFrom("three"),
+	})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2 (full + full2)", len(got))
+	}
+	if m.callN != 2 {
+		t.Errorf("LLM calls = %d, want 2 (extract + extractAdditional on single window)", m.callN)
+	}
+	if m.prompt == "" {
+		t.Error("prompt not captured")
+	}
+}
+
+func TestAnalyzePrefixRouteKeepsWindows(t *testing.T) {
+	// 默认/空串 route = prefix：与现状一致，逐窗并行提取。
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "w1", Confidence: 0.9}},
+		{{Topic: "w2", Confidence: 0.9}},
+		{{Topic: "w3", Confidence: 0.9}},
+	}}
+	cfg := analyzeCfg() // Route 未设置（""）
+	a := NewAnalyzer(m, cfg, false)
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+		turnsFrom("one"),
+		turnsFrom("two"),
+		turnsFrom("three"),
+	})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("candidates = %d, want 3 (one per window)", len(got))
+	}
+	if m.callN != 3 {
+		t.Errorf("LLM calls = %d, want 3", m.callN)
+	}
+}
+
+func TestAnalyzeFullRunsSecondPass(t *testing.T) {
+	// route=full：先 extract 一轮（full），再 extractAdditional 一轮（full2）。
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "p1", Confidence: 0.9}},
+		{{Topic: "p2", Confidence: 0.8}},
+	}}
+	cfg := analyzeCfg()
+	cfg.Route = "full"
+	a := NewAnalyzer(m, cfg, false)
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if m.callN != 2 {
+		t.Fatalf("LLM calls = %d, want 2 (extract + extractAdditional)", m.callN)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(got))
+	}
+}
+
+func TestExtractPromptHasFactCategories(t *testing.T) {
+	m := &mockLLM{cands: []Candidate{{Topic: "t", Confidence: 0.9}}}
+	a := NewAnalyzer(m, analyzeCfg(), false)
+	if _, err := a.Analyze(context.Background(), "a", [][]llm.Message{turnsFrom("x")}); err != nil {
+		t.Fatal(err)
+	}
+	// 事实类别引导必须出现在提取 prompt 中（英文关键词断言）。
+	for _, kw := range []string{"specific numbers", "API endpoints", "exact commands", "color", "root cause"} {
+		if !strings.Contains(m.prompt, kw) {
+			t.Errorf("prompt missing fact-category keyword %q\n---\n%s", kw, m.prompt)
+		}
+	}
+}
+
+func TestExtractAdditionalPromptHasExistingTopics(t *testing.T) {
+	m := &mockLLM{cands: []Candidate{{Topic: "added", Confidence: 0.9}}}
+	a := NewAnalyzer(m, analyzeCfg(), false)
+	first := []Candidate{
+		{Topic: "PostgreSQL", Confidence: 0.9},
+		{Topic: "Go 并发", Confidence: 0.8},
+	}
+	got, err := a.extractAdditional(context.Background(), turnsFrom("x"), first)
+	if err != nil {
+		t.Fatalf("extractAdditional error: %v", err)
+	}
+	if len(got) != 1 || got[0].Topic != "added" {
+		t.Fatalf("additional = %+v, want [added]", got)
+	}
+	// prompt 必须包含已有主题列表（规范化形式）+ 不要重复指令。
+	if !strings.Contains(m.prompt, "postgresql") || !strings.Contains(m.prompt, "go 并发") {
+		t.Errorf("prompt should list existing topics (normalized):\n%s", m.prompt)
+	}
+	if !strings.Contains(strings.ToLower(m.prompt), "do not repeat") && !strings.Contains(m.prompt, "不要重复") {
+		t.Errorf("prompt should forbid repeating existing topics:\n%s", m.prompt)
+	}
+}

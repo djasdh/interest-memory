@@ -53,6 +53,7 @@ type Analyzer struct {
 	maxCandidates  int
 	minConfidence  float64
 	selective      bool
+	route          string
 }
 
 // NewAnalyzer builds an Analyzer from fork config.
@@ -69,6 +70,9 @@ func NewAnalyzer(client LLM, cfg config.ForkConfig, selective bool) *Analyzer {
 	if cfg.MinConfidence <= 0 {
 		cfg.MinConfidence = 0.3
 	}
+	if cfg.Route == "" {
+		cfg.Route = "prefix"
+	}
 	return &Analyzer{
 		llm:            client,
 		prefixStep:     cfg.PrefixStep,
@@ -77,6 +81,7 @@ func NewAnalyzer(client LLM, cfg config.ForkConfig, selective bool) *Analyzer {
 		maxCandidates:  cfg.MaxCandidates,
 		minConfidence:  cfg.MinConfidence,
 		selective:      selective,
+		route:          cfg.Route,
 	}
 }
 
@@ -166,6 +171,21 @@ func (a *Analyzer) Analyze(ctx context.Context, agentID string, windows [][]llm.
 	if len(windows) == 0 {
 		return nil, nil
 	}
+	if a.route == "full" {
+		// 单窗口全量提取 + full2 追加一次，dedupe 合并两轮（v2 full+full2 路线）。
+		turns := windows[len(windows)-1]
+		first, err := a.extract(ctx, turns)
+		if err != nil {
+			return nil, err
+		}
+		added, err := a.extractAdditional(ctx, turns, first)
+		if err != nil {
+			return nil, err
+		}
+		return dedupe(append(first, added...)), nil
+	}
+
+	// prefix 路线：现有前缀窗并发提取逻辑（不变）。
 	results := make([]result, len(windows))
 	sem := make(chan struct{}, a.maxConcurrency)
 	var wg sync.WaitGroup
@@ -213,7 +233,7 @@ These could be:
 - Any strong opinions expressed
 
 For each topic, judge whether it is subjective (the user's own preference, taste, or opinion — e.g. "I prefer Go over Rust") or objective (a factual claim about the world — e.g. "PostgreSQL supports JSONB").
-
+%s
 Return a JSON array of objects, each with:
   - "topic": short phrase describing the topic
   - "reason": why this is worth remembering (1 sentence)
@@ -227,7 +247,7 @@ If nothing is worth remembering, return an empty array [].
 Conversation excerpt:
 %s
 
-Return ONLY valid JSON, no other text.`, wikiWorthyClause(a.selective), snapshot)
+Return ONLY valid JSON, no other text.`, factCategories, wikiWorthyClause(a.selective), snapshot)
 
 	var cands []Candidate
 	if err := a.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &cands); err != nil {
@@ -235,6 +255,60 @@ Return ONLY valid JSON, no other text.`, wikiWorthyClause(a.selective), snapshot
 	}
 	// Copy-filter into a fresh slice: cands may be shared across concurrent
 	// window goroutines (e.g. test fakes returning a common slice).
+	var filtered []Candidate
+	for _, c := range cands {
+		if c.Confidence >= a.minConfidence {
+			filtered = append(filtered, mapTurnRange(c, renderIndices(turns)))
+		}
+	}
+	if a.maxCandidates > 0 && len(filtered) > a.maxCandidates {
+		filtered = filtered[:a.maxCandidates]
+	}
+	return filtered, nil
+}
+
+// extractAdditional asks the side LLM for more interest points from the same
+// full-context window, given the topics already extracted in the first pass
+// (full2). The prompt explicitly forbids repeating existing topics; the caller
+// merges both passes via dedupe. Same confidence filter, turn-range mapping,
+// and per-window cap as extract.
+func (a *Analyzer) extractAdditional(ctx context.Context, turns []llm.Message, first []Candidate) ([]Candidate, error) {
+	snapshot := summarize(turns)
+	if snapshot == "" {
+		return nil, nil
+	}
+	var existing []string
+	for _, c := range first {
+		if k := normalizeTopic(c.Topic); k != "" {
+			existing = append(existing, k)
+		}
+	}
+	prompt := fmt.Sprintf(`Analyse this conversation excerpt again and identify ADDITIONAL topics that are worth remembering but were NOT already extracted.
+
+Already extracted topics (do NOT repeat any of these, even in different wording):
+%s
+
+If there are no new topics worth adding, return an empty array [].
+
+Return a JSON array of objects, each with:
+  - "topic": short phrase describing the topic
+  - "reason": why this is worth remembering (1 sentence)
+  - "confidence": 0.0 to 1.0
+  - "tags": array of short tags (max 5)
+  - "turn_range": [start_turn, end_turn] (approximate turn numbers from the excerpt)
+  - "subjective": true if this is a subjective preference/opinion, false if objective
+%s
+%s
+
+Conversation excerpt:
+%s
+
+Return ONLY valid JSON, no other text.`, strings.Join(existing, "\n"), factCategories, wikiWorthyClause(a.selective), snapshot)
+
+	var cands []Candidate
+	if err := a.llm.ChatJSON(ctx, []llm.Message{{Role: "user", Content: prompt}}, &cands); err != nil {
+		return nil, err
+	}
 	var filtered []Candidate
 	for _, c := range cands {
 		if c.Confidence >= a.minConfidence {
@@ -255,6 +329,18 @@ func wikiWorthyClause(selective bool) string {
 	}
 	return `  - "wiki_worthy": true if this topic deserves its own wiki page (durable, self-contained, non-trivial, still useful in future sessions); false if it is trivial, ephemeral, or a minor detail that does not merit a dedicated page. Judge honestly — not every remembered topic needs a wiki page.`
 }
+
+// factCategories guides extraction toward concrete facts instead of
+// engineering/metadata summaries (docs/fork-window-strategy.md §8.4: memories
+// held only meta info, missing concrete facts like 89527b6b's scale color).
+const factCategories = `
+When identifying topics, prefer CONCRETE FACTS over vague summaries — especially:
+  - specific numbers, dates, versions, and ttl_days values
+  - exact API endpoints and file paths
+  - exact commands and tool usage
+  - colors and visual details
+  - the root cause of an error or bug (not just the symptom)
+Include these details directly in the "topic" and "reason" fields.`
 
 // renderIndices returns the global message indexes that summarize() renders,
 // in order — i.e. non-empty user/assistant messages. The extraction prompt's

@@ -140,6 +140,10 @@ type ForkConfig struct {
 	ImportanceBoost  float64 `yaml:"importance_boost_per_seen"`
 	MaxCandidates    int     `yaml:"max_candidates_per_window"`
 	MinConfidence    float64 `yaml:"min_confidence"`
+	// Route selects the extraction strategy: "prefix" (default, prefix-window
+	// concurrent extraction) | "full" (single full-context window, then one
+	// additional pass that appends non-duplicate points).
+	Route string `yaml:"route"`
 }
 
 type RecallConfig struct {
@@ -177,6 +181,7 @@ func Default() Config {
 			ImportanceBoost:  0.05,
 			MaxCandidates:    20,
 			MinConfidence:    0.3,
+			Route:            "prefix",
 		},
 		Verify: VerifyConfig{
 			UseWebSearch:   true,
