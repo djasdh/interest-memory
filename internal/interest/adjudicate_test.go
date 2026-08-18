@@ -194,6 +194,57 @@ func TestAdjudicateKeepCreatesNewHistUntouched(t *testing.T) {
 	}
 }
 
+func TestAdjudicateKeepFallsBackToMemberTags(t *testing.T) {
+	// keep 时 LLM merged 给空 tags → Keywords 回退到该成员原始候选 Tags。
+	h := histPtComponent("h1", "历史点")
+	comp := buildComponent("a", h)
+	res := ClusterResult{Components: []Component{comp}}
+
+	em := &recordingEmbedder{}
+	lm := &verdictLLM{results: []any{map[string]any{
+		"decisions": []map[string]any{
+			decisionLLM("a", "keep", "", mergeCandidate{Topic: "独立点", Reason: "r", Confidence: 0.8, Tags: []string{}}),
+		},
+	}}}
+	out, err := Adjudicate(context.Background(), "ag", em, lm, res, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.FinalPoints) != 1 {
+		t.Fatalf("final = %d, want 1", len(out.FinalPoints))
+	}
+	fp := out.FinalPoints[0]
+	// 原始候选 mergeCand("a", 0.9) 带 Tags: ["t"]。
+	if len(fp.Point.Keywords) != 1 || fp.Point.Keywords[0] != "t" {
+		t.Errorf("keywords = %v, want fallback [t] (member candidate tags)", fp.Point.Keywords)
+	}
+}
+
+func TestAdjudicateMergeFallsBackToMemberTags(t *testing.T) {
+	// merge 时 LLM merged 给空 tags → 历史点 Keywords 回退到成员原始 Tags。
+	h := histPtComponent("h1", "历史点")
+	comp := buildComponent("a", h)
+	res := ClusterResult{Components: []Component{comp}}
+
+	em := &recordingEmbedder{}
+	lm := &verdictLLM{results: []any{map[string]any{
+		"decisions": []map[string]any{
+			decisionLLM("a", "merge", "h1", mergeCandidate{Topic: "合并点", Reason: "r", Confidence: 0.9, Tags: []string{}}),
+		},
+	}}}
+	out, err := Adjudicate(context.Background(), "ag", em, lm, res, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.FinalPoints) != 1 {
+		t.Fatalf("final = %d, want 1", len(out.FinalPoints))
+	}
+	fp := out.FinalPoints[0]
+	if len(fp.Point.Keywords) != 1 || fp.Point.Keywords[0] != "t" {
+		t.Errorf("keywords = %v, want fallback [t] (member candidate tags)", fp.Point.Keywords)
+	}
+}
+
 func TestAdjudicateArchiveArchivesHist(t *testing.T) {
 	h := histPtComponent("h1", "历史点")
 	comp := buildComponent("a", h)

@@ -161,13 +161,19 @@ func (a *Adjudication) applyComponent(ctx context.Context, agentID string, em Em
 		}
 	}
 
+	// Member original tags: fallback source when the LLM's merged.tags is empty.
+	memberTags := make(map[string][]string)
+	for _, m := range comp.Members {
+		memberTags[m.Candidate.Topic] = m.Candidate.Tags
+	}
+
 	for _, d := range out.Decisions {
 		switch d.Action {
 		case "merge":
 			// 覆盖式合并：a 的信息覆盖进历史点，a 不新建（"其实我更喜欢
 			// Rust" → h1 更新为 Rust）。历史点原 id 保留。
 			hist := findHist(comp, d.TargetID)
-			pt := updatedPoint(agentID, hist, d.Merged, d.TargetID)
+			pt := updatedPoint(agentID, hist, d.Merged, d.TargetID, memberTags[d.SourceTopic])
 			vec, err := em.Embed(ctx, candidateText(mergeCandidateToFork(d.Merged)))
 			if err != nil {
 				vec = nil
@@ -176,10 +182,10 @@ func (a *Adjudication) applyComponent(ctx context.Context, agentID string, em Em
 		case "keep":
 			// 相关但不 merge（或纯独立）：a 新建；可同时带动同蔟历史点
 			// update（Go 1.18 → 1.19）。
-			a.created(ctx, agentID, em, d.Merged)
+			a.created(ctx, agentID, em, d.Merged, memberTags[d.SourceTopic])
 			for _, u := range d.Updates {
 				hist := findHist(comp, u.TargetID)
-				upt := updatedPoint(agentID, hist, u.Merged, u.TargetID)
+				upt := updatedPoint(agentID, hist, u.Merged, u.TargetID, memberTags[d.SourceTopic])
 				uv, err := em.Embed(ctx, candidateText(mergeCandidateToFork(u.Merged)))
 				if err != nil {
 					uv = nil
@@ -191,7 +197,7 @@ func (a *Adjudication) applyComponent(ctx context.Context, agentID string, em Em
 			if hist != nil {
 				a.Archived = append(a.Archived, ArchivedPoint{Pt: hist.Pt})
 			}
-			a.created(ctx, agentID, em, d.Merged)
+			a.created(ctx, agentID, em, d.Merged, memberTags[d.SourceTopic])
 		}
 	}
 	for _, c := range out.Contradictions {
@@ -245,15 +251,21 @@ func (a *Adjudication) void(agentID string, comp Component) {
 	}
 }
 
-// created appends a new final point from a merged candidate.
-func (a *Adjudication) created(ctx context.Context, agentID string, em Embedder, m mergeCandidate) {
+// created appends a new final point from a merged candidate. When the LLM
+// gives no tags, fallbackTags (the member's original candidate tags) are kept
+// so the extraction's tag information is never silently dropped.
+func (a *Adjudication) created(ctx context.Context, agentID string, em Embedder, m mergeCandidate, fallbackTags []string) {
+	kw := m.Tags
+	if len(kw) == 0 {
+		kw = fallbackTags
+	}
 	now := time.Now().UTC()
 	pt := store.InterestPoint{
 		ID:         newID(m.Topic),
 		AgentID:    agentID,
 		Name:       m.Topic,
 		Summary:    m.Reason,
-		Keywords:   m.Tags,
+		Keywords:   kw,
 		Importance: m.Confidence,
 		Status:     "active",
 		Subjective: m.Subjective,
@@ -282,7 +294,9 @@ func (a *Adjudication) created(ctx context.Context, agentID string, em Embedder,
 }
 
 // updatedPoint builds the updated historical point (original id preserved).
-func updatedPoint(agentID string, hist *HistPoint, m mergeCandidate, id string) store.InterestPoint {
+// Tags priority: LLM's merged.tags, then the historical point's own keywords,
+// then the member's original candidate tags (fallbackTags).
+func updatedPoint(agentID string, hist *HistPoint, m mergeCandidate, id string, fallbackTags []string) store.InterestPoint {
 	if hist == nil {
 		return store.InterestPoint{
 			ID: id, AgentID: agentID, Name: m.Topic, Summary: m.Reason,
@@ -292,7 +306,14 @@ func updatedPoint(agentID string, hist *HistPoint, m mergeCandidate, id string) 
 	pt := hist.Pt
 	pt.Name = m.Topic
 	pt.Summary = m.Reason
-	pt.Keywords = m.Tags
+	kw := m.Tags
+	if len(kw) == 0 {
+		kw = pt.Keywords
+	}
+	if len(kw) == 0 {
+		kw = fallbackTags
+	}
+	pt.Keywords = kw
 	pt.Importance = m.Confidence
 	pt.Status = "active"
 	pt.SeenCount++
@@ -391,6 +412,9 @@ func buildAdjudicatePrompt(comp Component) string {
 	for i, m := range comp.Members {
 		b.WriteString(fmt.Sprintf("  %d. topic: %q\n     reason: %s\n     confidence: %.2f\n",
 			i+1, m.Candidate.Topic, m.Candidate.Reason, m.Candidate.Confidence))
+		if len(m.Candidate.Tags) > 0 {
+			b.WriteString(fmt.Sprintf("     tags: %s\n", strings.Join(m.Candidate.Tags, ", ")))
+		}
 	}
 	b.WriteString("\nHISTORICAL points (refer to them by id):\n")
 	for i, h := range comp.Hist {
