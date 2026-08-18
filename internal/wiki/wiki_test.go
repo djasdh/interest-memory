@@ -747,6 +747,53 @@ func TestBuildCompilePrompt(t *testing.T) {
 	}
 }
 
+func TestIPQueryReturnsInterestPointsAndHasPage(t *testing.T) {
+	deps, st, v := newTestDeps(t)
+	ctx := context.Background()
+
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-1", AgentID: "agent-a", Name: "PostgreSQL", Summary: "默认数据库"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Upsert(ctx, vec.Entry{ID: "ip-1", AgentID: "agent-a", Kind: "interest_point",
+		Metadata: map[string]string{"title": "PostgreSQL", "body": "postgres 数据库"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertPage(ctx, store.Page{ID: "postgresql-page", AgentID: "agent-a", Title: "PostgreSQL", BodyMD: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddEdgePair(ctx, "agent-a", store.Edge{SourceID: "ip-1", TargetID: "postgresql-page", Kind: store.EdgeHasPage}); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewIPQueryTool(deps, "agent-a")
+	res, err := tool.Execute(types.Context{}, map[string]any{"query": "postgres"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == "" || res == "(ip_query: no matching interest points)" {
+		t.Errorf("expected hits, got %q", res)
+	}
+	if !strings.Contains(res, "PostgreSQL") || !strings.Contains(res, "postgresql-page") {
+		t.Errorf("result should include point name and existing page id, got:\n%s", res)
+	}
+}
+
+func TestIPQueryKeywordFallback(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	if err := st.UpsertInterestPoint(ctx, store.InterestPoint{ID: "ip-2", AgentID: "agent-a", Name: "Go Channels", Summary: "goroutine 通信"}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewIPQueryTool(deps, "agent-a")
+	res, err := tool.Execute(types.Context{}, map[string]any{"query": "channels"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "Go Channels") {
+		t.Errorf("keyword fallback should surface interest point, got:\n%s", res)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

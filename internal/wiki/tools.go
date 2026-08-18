@@ -664,3 +664,100 @@ func claimID(agentID, pageID, text string) string {
 	h := sha256.Sum256([]byte(agentID + "|" + pageID + "|" + text))
 	return hex.EncodeToString(h[:])[:16]
 }
+
+// NewIPQueryTool returns the ip_query tool: semantic search over interest
+// points only (wiki pages excluded), with has_page relationships resolved for
+// each hit. Scope includes the historical library (vec.Search is the whole
+// agent namespace). Keyword fallback when vectors are unavailable.
+func NewIPQueryTool(deps ToolsDeps, agentID string) types.Tool {
+	return types.Tool{
+		Name:        "ip_query",
+		Description: "Search interest points (not wiki pages) related to the given query. Returns each point's name/summary/reliability and the wiki page(s) it already has (has_page). Use to check which interest points already exist and whether they already have a page before writing.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "The search query (natural language)"},
+				"top_k": map[string]any{"type": "number", "description": "Number of results to return (default 3, max 10)"},
+			},
+			"required": []string{"query"},
+		},
+		Execute: func(_ types.Context, args types.ArgsMap, _ <-chan struct{}) (string, error) {
+			query, _ := args["query"].(string)
+			if strings.TrimSpace(query) == "" {
+				return "", fmt.Errorf("ip_query: missing 'query'")
+			}
+			topK := 3
+			if v, ok := args["top_k"].(float64); ok && v > 0 {
+				topK = int(v)
+			}
+			if topK > 10 {
+				topK = 10
+			}
+			return queryInterestPoints(context.Background(), deps, agentID, query, topK)
+		},
+	}
+}
+
+func queryInterestPoints(ctx context.Context, deps ToolsDeps, agentID, query string, topK int) (string, error) {
+	var ipIDs []string
+	if deps.Embedder != nil && deps.Vec != nil {
+		if q, err := deps.Embedder.Embed(ctx, query); err == nil {
+			if hits, err := deps.Vec.Search(ctx, agentID, q, topK); err == nil {
+				for _, h := range hits {
+					if h.Kind == "interest_point" {
+						ipIDs = append(ipIDs, h.ID)
+					}
+				}
+			}
+		}
+	}
+	if len(ipIDs) == 0 {
+		ips, err := deps.Store.SearchInterestPointsByKeywords(ctx, agentID, query, topK)
+		if err != nil || len(ips) == 0 {
+			return "(ip_query: no matching interest points)", nil
+		}
+		for _, p := range ips {
+			ipIDs = append(ipIDs, p.ID)
+		}
+	}
+	if len(ipIDs) == 0 {
+		return "(ip_query: no matching interest points)", nil
+	}
+
+	pts, err := deps.Store.GetInterestPointsByIDs(ctx, agentID, ipIDs)
+	if err != nil {
+		return "", fmt.Errorf("ip_query: get interest points: %w", err)
+	}
+	byID := make(map[string]store.InterestPoint, len(pts))
+	for _, p := range pts {
+		byID[p.ID] = p
+	}
+	pages, _ := deps.Store.InterestPointPages(ctx, agentID, ipIDs)
+	pagesOf := make(map[string][]string)
+	for _, r := range pages {
+		pagesOf[r.InterestPointID] = append(pagesOf[r.InterestPointID], r.PageID+" ("+r.PageTitle+")")
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Found %d interest point(s) for %q:\n\n", len(ipIDs), query))
+	n := 0
+	for _, id := range ipIDs {
+		p, ok := byID[id]
+		if !ok {
+			continue
+		}
+		n++
+		b.WriteString(fmt.Sprintf("%d. %s\n", n, p.Name))
+		if p.Summary != "" {
+			b.WriteString(fmt.Sprintf("   Summary: %s\n", truncate(p.Summary, 300)))
+		}
+		if p.Reliability.Status != "" {
+			b.WriteString(fmt.Sprintf("   Reliability: %s (%.2f)\n", p.Reliability.Status, p.Reliability.Confidence))
+		}
+		if ps := pagesOf[id]; len(ps) > 0 {
+			b.WriteString("   Existing page(s): " + strings.Join(ps, "; ") + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
