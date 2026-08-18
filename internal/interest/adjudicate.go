@@ -26,13 +26,10 @@ type ArchivedPoint struct {
 
 // Adjudication is V1.2's output: the points with real changes (create/update)
 // plus archived historical points and contradiction pairs. It never persists.
-// DecidedPairs carries the final-id pairs adjudicated this batch so V1.3 can
-// skip programmatic related edges between them (respecting LLM verdicts).
 type Adjudication struct {
 	FinalPoints    []FinalPoint
 	Archived       []ArchivedPoint
 	Contradictions []store.Contradiction
-	DecidedPairs   [][2]string
 }
 
 // adjudicateMeta is the reliability/freshness metadata the LLM assigns to a
@@ -48,10 +45,19 @@ type adjudicateMeta struct {
 
 // adjudicateDecision is one per-member verdict inside a component.
 type adjudicateDecision struct {
-	SourceTopic string         `json:"source_topic"`
-	Action      string         `json:"action"` // merge | update | keep | archive
-	TargetID    string         `json:"target_id"`
-	Merged      mergeCandidate `json:"merged"`
+	SourceTopic string             `json:"source_topic"`
+	Action      string             `json:"action"` // merge | keep | archive
+	TargetID    string             `json:"target_id"`
+	Merged      mergeCandidate     `json:"merged"`
+	Updates     []adjudicateUpdate `json:"updates"`
+}
+
+// adjudicateUpdate is a historical point the LLM decides to update as a
+// side-effect of a member's keep/merge (e.g. Go 1.18 → 1.19). target_id names
+// the historical point; merged is its post-update form.
+type adjudicateUpdate struct {
+	TargetID string         `json:"target_id"`
+	Merged   mergeCandidate `json:"merged"`
 }
 
 type adjudicateContradiction struct {
@@ -158,8 +164,8 @@ func (a *Adjudication) applyComponent(ctx context.Context, agentID string, em Em
 	for _, d := range out.Decisions {
 		switch d.Action {
 		case "merge":
-			// a folds into the historical point; only the updated hist point
-			// survives (original id preserved).
+			// 覆盖式合并：a 的信息覆盖进历史点，a 不新建（"其实我更喜欢
+			// Rust" → h1 更新为 Rust）。历史点原 id 保留。
 			hist := findHist(comp, d.TargetID)
 			pt := updatedPoint(agentID, hist, d.Merged, d.TargetID)
 			vec, err := em.Embed(ctx, candidateText(mergeCandidateToFork(d.Merged)))
@@ -167,22 +173,19 @@ func (a *Adjudication) applyComponent(ctx context.Context, agentID string, em Em
 				vec = nil
 			}
 			a.FinalPoints = append(a.FinalPoints, FinalPoint{Point: pt, Vec: vec, Action: "update"})
-		case "update":
-			// a is worth keeping as its own point AND the historical point is
-			// refined.
-			hist := findHist(comp, d.TargetID)
-			hpt := updatedPoint(agentID, hist, d.Merged, d.TargetID)
-			hv, err := em.Embed(ctx, candidateText(mergeCandidateToFork(d.Merged)))
-			if err != nil {
-				hv = nil
-			}
-			a.FinalPoints = append(a.FinalPoints, FinalPoint{Point: hpt, Vec: hv, Action: "update"})
-			a.created(ctx, agentID, em, d.Merged)
-			if d.TargetID != "" {
-				a.DecidedPairs = append(a.DecidedPairs, [2]string{d.TargetID, newID(d.Merged.Topic)})
-			}
 		case "keep":
+			// 相关但不 merge（或纯独立）：a 新建；可同时带动同蔟历史点
+			// update（Go 1.18 → 1.19）。
 			a.created(ctx, agentID, em, d.Merged)
+			for _, u := range d.Updates {
+				hist := findHist(comp, u.TargetID)
+				upt := updatedPoint(agentID, hist, u.Merged, u.TargetID)
+				uv, err := em.Embed(ctx, candidateText(mergeCandidateToFork(u.Merged)))
+				if err != nil {
+					uv = nil
+				}
+				a.FinalPoints = append(a.FinalPoints, FinalPoint{Point: upt, Vec: uv, Action: "update"})
+			}
 		case "archive":
 			hist := findHist(comp, d.TargetID)
 			if hist != nil {
@@ -396,10 +399,11 @@ func buildAdjudicatePrompt(comp Component) string {
 	}
 	b.WriteString(`
 For EVERY new point output exactly one decision. Actions:
-- "merge": the new point is the same topic as the historical point → fold it into the historical point (historical point updated, new point not created separately).
-- "update": the new point is related and worth keeping on its own, AND it refines the historical point → keep the new point AND update the historical point.
-- "keep": the new point is unrelated to the historical point(s) → create it as a new point, historical point untouched.
+- "merge": the new point OVERTAKES the historical point (covering merge, e.g. "actually I prefer Rust now" → the historical point is updated to the new preference). The historical point keeps its id; the new point is not created separately.
+- "keep": the new point is related but not mergeable (or fully independent) → create it as a new point; the historical point is untouched UNLESS listed in "updates".
 - "archive": the new point overturns the historical point → archive the historical point, create the new point.
+
+"updates" (optional): historical points you decide to update as a side-effect of this decision (e.g. the new point says "Go 1.19" and a historical point said "Go 1.18" → update it). Each entry: target_id (historical id) + merged (its post-update form).
 
 The "merged" object is the FINAL interest point: give its name, summary, confidence, tags, subjective (bool), and reliability/freshness metadata (reliability_status: supported|contested|unknown, confidence 0-1, freshness_level: fresh|aging|stale|unknown, ttl_days, wiki_worthy). You do NOT assign ids — the system derives them.
 
@@ -408,9 +412,11 @@ Also list any contradictions between a new point and a historical point: "left"/
 Return ONLY valid JSON:
 {
   "decisions": [
-    { "source_topic": "<new point topic>", "action": "merge"|"update"|"keep"|"archive", "target_id": "<historical id or empty>",
+    { "source_topic": "<new point topic>", "action": "merge"|"keep"|"archive", "target_id": "<historical id or empty>",
       "merged": { "name": "...", "summary": "...", "confidence": 0.0-1.0, "tags": [...], "subjective": false,
-                  "reliability_status": "...", "freshness_level": "...", "ttl_days": 0, "wiki_worthy": true } }
+                  "reliability_status": "...", "freshness_level": "...", "ttl_days": 0, "wiki_worthy": true },
+      "updates": [ { "target_id": "<historical id>", "merged": { "name": "...", "summary": "...", "confidence": 0.0-1.0, "tags": [...] } } ]
+    }
   ],
   "contradictions": [
     { "left": "<topic or id>", "right": "<topic or id>", "description": "..." }

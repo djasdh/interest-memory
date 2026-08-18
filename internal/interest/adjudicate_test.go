@@ -57,6 +57,15 @@ func decisionLLM(topic, action, target string, merged mergeCandidate) map[string
 	}
 }
 
+// decisionLLMUpdates builds a decision with associated historical updates.
+func decisionLLMUpdates(topic, action, target string, merged mergeCandidate, updates []map[string]any) map[string]any {
+	d := decisionLLM(topic, action, target, merged)
+	if len(updates) > 0 {
+		d["updates"] = updates
+	}
+	return d
+}
+
 // buildComponent builds a Component with one member and one hist point.
 func buildComponent(member string, histPt HistPoint) Component {
 	c := Component{
@@ -106,7 +115,8 @@ func TestAdjudicateMergeKeepsHistID(t *testing.T) {
 	}
 }
 
-func TestAdjudicateUpdateCreatesNewPlusHist(t *testing.T) {
+func TestAdjudicateKeepUpdatesHist(t *testing.T) {
+	// keep + 带动 update（Go 1.19 例子）：a 新建 + h1 更新，两者都存活。
 	h := histPtComponent("h1", "历史点")
 	comp := buildComponent("a", h)
 	res := ClusterResult{Components: []Component{comp}}
@@ -114,8 +124,12 @@ func TestAdjudicateUpdateCreatesNewPlusHist(t *testing.T) {
 	em := &recordingEmbedder{}
 	lm := &verdictLLM{results: []any{map[string]any{
 		"decisions": []map[string]any{
-			decisionLLM("a", "update", "h1", mergeCandidate{
+			decisionLLMUpdates("a", "keep", "", mergeCandidate{
 				Topic: "新点", Reason: "r", Confidence: 0.9, Tags: []string{},
+			}, []map[string]any{
+				{"target_id": "h1", "merged": mergeCandidate{
+					Topic: "历史点更新", Reason: "upd", Confidence: 0.8, Tags: []string{},
+				}},
 			}),
 		},
 	}}}
@@ -124,15 +138,32 @@ func TestAdjudicateUpdateCreatesNewPlusHist(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out.FinalPoints) != 2 {
-		t.Fatalf("final points = %d, want 2 (h1 updated + new)", len(out.FinalPoints))
+		t.Fatalf("final points = %d, want 2 (a new + h1 updated)", len(out.FinalPoints))
 	}
-	// One is the updated historical point, one is the new point.
 	ids := map[string]bool{}
+	actions := map[string]string{}
 	for _, fp := range out.FinalPoints {
 		ids[fp.Point.ID] = true
+		actions[fp.Point.ID] = fp.Action
 	}
 	if !ids["h1"] {
 		t.Errorf("missing updated h1; ids = %v", ids)
+	}
+	if actions["h1"] != "update" {
+		t.Errorf("h1 action = %q, want update", actions["h1"])
+	}
+	// a's new point: not h1, action create.
+	var aID string
+	for _, fp := range out.FinalPoints {
+		if fp.Point.ID != "h1" {
+			aID = fp.Point.ID
+			if fp.Action != "create" {
+				t.Errorf("a action = %q, want create", fp.Action)
+			}
+		}
+	}
+	if aID == "" {
+		t.Fatal("missing a new point")
 	}
 }
 
