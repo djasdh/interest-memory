@@ -197,17 +197,30 @@ func sameWindow(a, b []llm.Message) bool {
 	return true
 }
 
-// Analyze extracts candidates from each window concurrently (bounded by
-// maxConcurrency) and merges them in window order. Candidate count is capped
-// per window by max_candidates_per_window (config semantics); overlapping
-// prefix windows are deduplicated afterwards.
+// Analyze extracts candidates per route strategy:
+//   - "prefix"     prefix-window split, full render (incl. tool output)
+//   - "non_prefix" non-overlapping user-turn windows, compressed render
+//   - "full"       single full-context window, compressed render, one pass
+//   - "full2"      single full-context window, compressed render, two passes (append)
+//
+// Windows are re-split internally from the last (full-transcript) window, so
+// the service layer passes the same split output regardless of route.
 func (a *Analyzer) Analyze(ctx context.Context, agentID string, windows [][]llm.Message) ([]Candidate, error) {
 	if len(windows) == 0 {
 		return nil, nil
 	}
-	if a.route == "full" {
-		// 单窗口全量提取 + full2 追加一次，dedupe 合并两轮（v2 full+full2 路线）。
-		turns := windows[len(windows)-1]
+	// 完整 transcript 恒为传入 windows 的末窗（service 的 SplitPrefixWindows
+	// 产物中末窗覆盖全部 turns；Analyzer 按 route 重切）。
+	turns := windows[len(windows)-1]
+
+	switch a.route {
+	case "full":
+		first, err := a.extract(ctx, turns)
+		if err != nil {
+			return nil, err
+		}
+		return dedupe(first), nil
+	case "full2":
 		first, err := a.extract(ctx, turns)
 		if err != nil {
 			return nil, err
@@ -217,9 +230,21 @@ func (a *Analyzer) Analyze(ctx context.Context, agentID string, windows [][]llm.
 			return nil, err
 		}
 		return dedupe(append(first, added...)), nil
+	case "non_prefix":
+		return a.analyzeWindows(ctx, SplitNonPrefixWindows(turns, a.prefixStep, a.maxWindows))
+	default: // "prefix"
+		return a.analyzeWindows(ctx, SplitPrefixWindows(turns, a.prefixStep, a.maxWindows))
 	}
+}
 
-	// prefix 路线：现有前缀窗并发提取逻辑（不变）。
+// analyzeWindows runs the concurrent per-window extraction over pre-split
+// windows and merges results in window order. Candidate count is capped per
+// window by max_candidates_per_window (config semantics); overlapping windows
+// are deduplicated afterwards.
+func (a *Analyzer) analyzeWindows(ctx context.Context, windows [][]llm.Message) ([]Candidate, error) {
+	if len(windows) == 0 {
+		return nil, nil
+	}
 	results := make([]result, len(windows))
 	sem := make(chan struct{}, a.maxConcurrency)
 	var wg sync.WaitGroup

@@ -341,16 +341,16 @@ func TestDedupe(t *testing.T) {
 }
 
 func TestAnalyzeDedupesAcrossWindows(t *testing.T) {
-	// Same topic surfaced by every prefix window merges into one candidate.
+	// Same topic surfaced by every window merges into one candidate.
 	m := &mockLLM{cands: []Candidate{{Topic: "dup", Confidence: 0.9}}}
 	a := NewAnalyzer(m, analyzeCfg(), false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+	got, err := a.analyzeWindows(context.Background(), [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
 		turnsFrom("three"),
 	})
 	if err != nil {
-		t.Fatalf("Analyze error: %v", err)
+		t.Fatalf("analyzeWindows error: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("candidates = %d, want 1 (deduped across windows)", len(got))
@@ -392,13 +392,13 @@ func TestAnalyzeMergesAcrossWindows(t *testing.T) {
 		{{Topic: "w3", Confidence: 0.9}},
 	}}
 	a := NewAnalyzer(m, analyzeCfg(), false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+	got, err := a.analyzeWindows(context.Background(), [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
 		turnsFrom("three"),
 	})
 	if err != nil {
-		t.Fatalf("Analyze error: %v", err)
+		t.Fatalf("analyzeWindows error: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("candidates = %d, want 3 (one per window)", len(got))
@@ -420,7 +420,7 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 	cfg := analyzeCfg()
 	cfg.MaxCandidates = 1
 	a := NewAnalyzer(m, cfg, false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+	got, err := a.analyzeWindows(context.Background(), [][]llm.Message{
 		turnsFrom("one"),
 		turnsFrom("two"),
 	})
@@ -447,12 +447,12 @@ func TestAnalyzeMaxCandidatesPerWindow(t *testing.T) {
 func TestAnalyzeSkipsEmptyWindow(t *testing.T) {
 	m := &mockLLM{cands: []Candidate{{Topic: "x", Confidence: 0.9}}}
 	a := NewAnalyzer(m, analyzeCfg(), false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
+	got, err := a.analyzeWindows(context.Background(), [][]llm.Message{
 		turnsFrom("real"),
 		turnsFrom(), // no content → no LLM call
 	})
 	if err != nil {
-		t.Fatalf("Analyze error: %v", err)
+		t.Fatalf("analyzeWindows error: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("candidates = %d, want 1", len(got))
@@ -562,13 +562,9 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-func TestAnalyzeFullRouteUsesSingleWindow(t *testing.T) {
-	// route=full：忽略传入 windows 的切分，强制单窗口（末窗=完整 transcript），
-	// 且只针对该窗口做 extract + extractAdditional 两次调用。
-	m := &mockLLM{perCall: [][]Candidate{
-		{{Topic: "full-only", Confidence: 0.9}},
-		{{Topic: "full2-only", Confidence: 0.8}},
-	}}
+func TestAnalyzeFullRouteSinglePass(t *testing.T) {
+	// route=full：单窗口压缩，仅一轮 extract（不再有 full2 追加）。
+	m := &mockLLM{cands: []Candidate{{Topic: "full-only", Confidence: 0.9}}}
 	cfg := analyzeCfg()
 	cfg.Route = "full"
 	a := NewAnalyzer(m, cfg, false)
@@ -580,11 +576,11 @@ func TestAnalyzeFullRouteUsesSingleWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("candidates = %d, want 2 (full + full2)", len(got))
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(got))
 	}
-	if m.callN != 2 {
-		t.Errorf("LLM calls = %d, want 2 (extract + extractAdditional on single window)", m.callN)
+	if m.callN != 1 {
+		t.Errorf("LLM calls = %d, want 1 (single pass)", m.callN)
 	}
 	if m.prompt == "" {
 		t.Error("prompt not captured")
@@ -592,48 +588,26 @@ func TestAnalyzeFullRouteUsesSingleWindow(t *testing.T) {
 }
 
 func TestAnalyzePrefixRouteKeepsWindows(t *testing.T) {
-	// 默认/空串 route = prefix：与现状一致，逐窗并行提取。
+	// 空串 route = prefix：Analyze 内部用末窗重切 SplitPrefixWindows。
+	// 长 transcript（12 user 回合）→ 前缀窗 3 个（step 5）→ 3 次 LLM 调用。
 	m := &mockLLM{perCall: [][]Candidate{
 		{{Topic: "w1", Confidence: 0.9}},
 		{{Topic: "w2", Confidence: 0.9}},
 		{{Topic: "w3", Confidence: 0.9}},
 	}}
-	cfg := analyzeCfg() // Route 未设置（""）
+	cfg := analyzeCfg() // Route 未设置（""）→ NewAnalyzer 视为 "prefix"
+	cfg.PrefixStep = 5
 	a := NewAnalyzer(m, cfg, false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{
-		turnsFrom("one"),
-		turnsFrom("two"),
-		turnsFrom("three"),
-	})
+	transcript := mixTurns("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l")
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{transcript})
 	if err != nil {
 		t.Fatalf("Analyze error: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("candidates = %d, want 3 (one per window)", len(got))
 	}
 	if m.callN != 3 {
-		t.Errorf("LLM calls = %d, want 3", m.callN)
+		t.Errorf("LLM calls = %d, want 3 (prefix windows from full transcript)", m.callN)
 	}
-}
-
-func TestAnalyzeFullRunsSecondPass(t *testing.T) {
-	// route=full：先 extract 一轮（full），再 extractAdditional 一轮（full2）。
-	m := &mockLLM{perCall: [][]Candidate{
-		{{Topic: "p1", Confidence: 0.9}},
-		{{Topic: "p2", Confidence: 0.8}},
-	}}
-	cfg := analyzeCfg()
-	cfg.Route = "full"
-	a := NewAnalyzer(m, cfg, false)
-	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
-	if err != nil {
-		t.Fatalf("Analyze error: %v", err)
-	}
-	if m.callN != 2 {
-		t.Fatalf("LLM calls = %d, want 2 (extract + extractAdditional)", m.callN)
-	}
-	if len(got) != 2 {
-		t.Fatalf("candidates = %d, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("candidates = %d, want 3", len(got))
 	}
 }
 
@@ -671,5 +645,79 @@ func TestExtractAdditionalPromptHasExistingTopics(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(m.prompt), "do not repeat") && !strings.Contains(m.prompt, "不要重复") {
 		t.Errorf("prompt should forbid repeating existing topics:\n%s", m.prompt)
+	}
+}
+
+func TestAnalyzeFull2TwoPasses(t *testing.T) {
+	m := &mockLLM{perCall: [][]Candidate{
+		{{Topic: "p1", Confidence: 0.9}},
+		{{Topic: "p2", Confidence: 0.8}},
+	}}
+	cfg := analyzeCfg()
+	cfg.Route = "full2"
+	a := NewAnalyzer(m, cfg, false)
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if m.callN != 2 {
+		t.Fatalf("LLM calls = %d, want 2 (extract + extractAdditional)", m.callN)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(got))
+	}
+}
+
+func TestAnalyzeNonPrefixWindows(t *testing.T) {
+	// route=non_prefix：互不重叠窗口，并行提取，全部调用压缩渲染。
+	m := &mockLLM{cands: []Candidate{{Topic: "n1", Confidence: 0.9}}}
+	cfg := analyzeCfg()
+	cfg.Route = "non_prefix"
+	a := NewAnalyzer(m, cfg, false)
+	got, err := a.Analyze(context.Background(), "agent-a", [][]llm.Message{turnsFrom("x")})
+	if err != nil {
+		t.Fatalf("Analyze error: %v", err)
+	}
+	if m.callN != 1 {
+		t.Errorf("LLM calls = %d, want 1", m.callN)
+	}
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(got))
+	}
+}
+
+func TestAnalyzePrefixRendersToolOutput(t *testing.T) {
+	// route=prefix（默认）：不压缩渲染——tool 输出进 prompt。
+	msgs := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "check"},
+		{Role: "tool", Content: "tool-result-xyz"},
+	}
+	m := &mockLLM{cands: []Candidate{{Topic: "t", Confidence: 0.9}}}
+	a := NewAnalyzer(m, analyzeCfg(), false)
+	if _, err := a.Analyze(context.Background(), "a", [][]llm.Message{msgs}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.prompt, "tool-result-xyz") {
+		t.Errorf("prefix prompt should include tool output:\n%s", m.prompt)
+	}
+}
+
+func TestAnalyzeNonPrefixSkipsToolOutput(t *testing.T) {
+	// route=non_prefix：压缩渲染——tool 输出不进 prompt。
+	msgs := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "check"},
+		{Role: "tool", Content: "tool-result-xyz"},
+	}
+	m := &mockLLM{cands: []Candidate{{Topic: "t", Confidence: 0.9}}}
+	cfg := analyzeCfg()
+	cfg.Route = "non_prefix"
+	a := NewAnalyzer(m, cfg, false)
+	if _, err := a.Analyze(context.Background(), "a", [][]llm.Message{msgs}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(m.prompt, "tool-result-xyz") {
+		t.Errorf("non_prefix prompt should skip tool output:\n%s", m.prompt)
 	}
 }
