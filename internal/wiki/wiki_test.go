@@ -192,11 +192,11 @@ func TestWriteToolCreatesHasPageEdge(t *testing.T) {
 	tool := NewWriteTool(deps, "agent-a")
 
 	_, err := tool.Execute(types.Context{}, map[string]any{
-		"id":                "postgresql-page",
-		"title":             "PostgreSQL",
-		"content":           "默认数据库",
-		"page_type":         "concept",
-		"interest_point_id": "ip-123",
+		"id":                 "postgresql-page",
+		"title":              "PostgreSQL",
+		"content":            "默认数据库",
+		"page_type":          "concept",
+		"interest_point_ids": []any{"ip-123"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("write: %v", err)
@@ -213,6 +213,62 @@ func TestWriteToolCreatesHasPageEdge(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("has_page edge not created; outlinks = %+v", edges)
+	}
+}
+
+func TestWriteToolMultiHasPageEdges(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+
+	_, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                 "multi-page",
+		"title":              "Multi Point Page",
+		"content":            "body",
+		"interest_point_ids": []any{"ip-1", "ip-2"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[string]bool{}
+	for _, ipID := range []string{"ip-1", "ip-2"} {
+		outs, err := st.Outlinks(ctx, "agent-a", ipID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range outs {
+			if e.Kind == store.EdgeHasPage && e.TargetID == "multi-page" {
+				seen[ipID] = true
+			}
+		}
+	}
+	if !seen["ip-1"] || !seen["ip-2"] {
+		t.Errorf("has_page edges = %+v, want both ip-1 and ip-2", seen)
+	}
+}
+
+func TestWriteToolIgnoresLegacySingleInterestPointID(t *testing.T) {
+	deps, st, _ := newTestDeps(t)
+	ctx := context.Background()
+	tool := NewWriteTool(deps, "agent-a")
+	_, err := tool.Execute(types.Context{}, map[string]any{
+		"id":                "page-x",
+		"title":             "X",
+		"content":           "body",
+		"interest_point_id": "ip-old", // legacy single-value no longer honored
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges, err := st.ListEdges(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if e.Kind == store.EdgeHasPage {
+			t.Errorf("unexpected has_page edge %+v (legacy single-value should be ignored)", e)
+		}
 	}
 }
 
@@ -263,11 +319,11 @@ func TestWriteToolLogsPageCreate(t *testing.T) {
 	}
 	tool := NewWriteTool(deps, "agent-a")
 	if _, err := tool.Execute(types.Context{}, map[string]any{
-		"id":                "pg1",
-		"title":             "P1",
-		"content":           "内容",
-		"page_type":         "concept",
-		"interest_point_id": "ip-1",
+		"id":                 "pg1",
+		"title":              "P1",
+		"content":            "内容",
+		"page_type":          "concept",
+		"interest_point_ids": []any{"ip-1"},
 		"edges": []any{map[string]any{
 			"target_id": "pg2",
 			"type":      "related",

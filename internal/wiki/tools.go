@@ -182,7 +182,11 @@ func NewWriteTool(deps ToolsDeps, agentID string) types.Tool {
 				"page_type":         map[string]any{"type": "string", "description": "concept | source | synthesis | entity"},
 				"status":            map[string]any{"type": "string", "description": "active | superseded | archived (default active)"},
 				"event_time":        map[string]any{"type": "string", "description": "Event time (RFC3339, from the interest point's session start time)"},
-				"interest_point_id": map[string]any{"type": "string", "description": "The interest point id that drove this page — links the page to it via a has_page edge"},
+				"interest_point_ids": map[string]any{
+					"type":        "array",
+					"description": "The interest point id(s) that drove this page — links the page to them via has_page edges (multi-to-one allowed)",
+					"items":       map[string]any{"type": "string"},
+				},
 				"tags":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Taxonomy tags (look up existing tags with wiki_tags and reuse them)"},
 				"sources":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Sources: key web page URLs or existing page ids (may be omitted for subjective interest points)"},
 				"session_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "source session ids (for source pages)"},
@@ -244,7 +248,10 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 	default:
 		status = "active"
 	}
-	interestPointID := normalizeID(asString(args["interest_point_id"]))
+	ipIDs := stringList(args["interest_point_ids"])
+	for i := range ipIDs {
+		ipIDs[i] = normalizeID(ipIDs[i])
+	}
 	var eventTime time.Time
 	if s := asString(args["event_time"]); s != "" {
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
@@ -311,14 +318,16 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 		return "", fmt.Errorf("wiki_write: upsert page: %w", err)
 	}
 
-	// Link the interest point that drove this page (has_page edge).
-	if interestPointID != "" {
+	// Link the interest points that drove this page (has_page edges).
+	var logEdges []store.LogEdge
+	for _, ipID := range ipIDs {
 		if err := deps.Store.AddEdgePair(ctx, agentID, store.Edge{
-			SourceID: interestPointID, TargetID: id,
+			SourceID: ipID, TargetID: id,
 			Kind: store.EdgeHasPage, Weight: 1, CreatedAt: now,
 		}); err != nil {
-			return "", fmt.Errorf("wiki_write: add has_page edge: %w", err)
+			return "", fmt.Errorf("wiki_write: add has_page edge %s→%s: %w", ipID, id, err)
 		}
+		logEdges = append(logEdges, store.LogEdge{Action: "add", SourceID: ipID, TargetID: id, Kind: store.EdgeHasPage, Weight: 1})
 	}
 
 	// Claims.
@@ -369,10 +378,6 @@ func writeWiki(ctx context.Context, deps ToolsDeps, agentID string, args types.A
 	}
 	if status != "active" {
 		logAction = status // superseded | archived
-	}
-	var logEdges []store.LogEdge
-	if interestPointID != "" {
-		logEdges = append(logEdges, store.LogEdge{Action: "add", SourceID: interestPointID, TargetID: id, Kind: store.EdgeHasPage, Weight: 1})
 	}
 	for _, e := range edges {
 		kind := store.EdgeType(e.Type)

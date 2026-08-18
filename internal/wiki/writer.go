@@ -61,13 +61,13 @@ func NewWriter(deps ToolsDeps, prov ProviderFactory, lang string, verifyClaims b
 	if lang == "" {
 		lang = "English"
 	}
-	system := `You are a wiki editing assistant. You write or update ONE wiki page per interest point.
+	system := `You are a wiki editing assistant. You write or update wiki pages for interest points.
 Workflow (mandatory):
-1. Use wiki_query to check whether a related page already exists; if so update it by its id instead of creating a new one
+1. Use wiki_query (or ip_query) to check whether a related page already exists; if so update it by its id instead of creating a new one
 2. Write the page content (markdown, may use [[wikilink]] double links to related pages)
 3. For objective factual claims, run verify_claims web fact-check before writing
 4. Before the formal write, you MUST call the review tool to review your draft and adopt sound suggestions
-5. Use wiki_write with page_type=concept, pass interest_point_id (this point's id), and provide suitable tags, edges, claims
+5. Use wiki_write with page_type=concept, pass interest_point_ids (the interest point id(s) driving this page, as an array), and provide suitable tags, edges, claims
 6. Output concise and accurate content; do not write filler
 
 Language: all page content (title, body, related links) must be written in ` + lang + `.
@@ -268,7 +268,7 @@ func buildPointPrompt(ip store.InterestPoint, dialog, related, lang string) stri
 		b.WriteString("\n## Existing related pages (prefer updating rather than creating)\n")
 		b.WriteString(related)
 	}
-	b.WriteString("\nFollow the workflow: wiki_query → draft → verify_claims (objective claims) → review → wiki_write (with interest_point_id).\n")
+	b.WriteString("\nFollow the workflow: wiki_query → draft → verify_claims (objective claims) → review → wiki_write (with interest_point_ids listing the interest point id(s) driving this page).\n")
 	b.WriteString(fmt.Sprintf("Write all page content (title, body, related links) in '%s'.\n", lang))
 	return b.String()
 }
