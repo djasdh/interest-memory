@@ -6,7 +6,8 @@
   "main": "lib/index.js",
   "files": [
     "lib/index.js",
-    "lib/lib.js"
+    "lib/lib.js",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "test": "node --test lib/lib.test.mjs"
@@ -19,6 +20,11 @@
     "agent",
     "rag"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "dependencies": {
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1"

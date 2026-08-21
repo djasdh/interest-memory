@@ -31,6 +31,11 @@ dsh plugin --profile web add @djasdh/interest-memory-dsh-bridge
 `node_modules` and the loader resolves the row's `name:` from there. The
 package is plain JS — no build step, no `allowBuilds` entry needed.
 
+The package also ships a **bundle patch** (`dsh.bundle.patch` →
+`cordis.patch.yml`), so harnesses that mount bundles can register the
+`interest-memory` row in one step. Manual row mounting below still works and
+is the recommended path for per-session (preset) memory.
+
 ## Mount
 
 ### As an agent preset row (per-session memory — recommended)

@@ -1,0 +1,15 @@
+# interest-memory × DeepSeek Harness bundle patch.
+#
+# This is the `dsh.bundle.patch` layer declared in package.json. Installing
+# the package with `dsh plugin --profile <name> add @djasdh/interest-memory-dsh-bridge`
+# and mounting this bundle (or copying the row below into your profile's
+# cordis.patch.yml) registers the plugin row once; the last write wins per row,
+# so users can override `config` (baseUrl / agent / timeouts) in their own
+# profile patch.
+
+- insert:
+    - id: interest-memory
+      name: '@djasdh/interest-memory-dsh-bridge'
+      config:
+        baseUrl: http://127.0.0.1:8899
+        agent: dsh
