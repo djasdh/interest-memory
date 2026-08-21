@@ -1,6 +1,6 @@
 {
   "name": "@djasdh/interest-memory-dsh-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "interest-memory ↔ DeepSeek Harness (DSH) bridge: zero-lag recall injection, session-end transcript ingest, and memory_search/memory_logs/memory_ingest tools for DSH agents.",
   "type": "module",
   "main": "lib/index.js",
