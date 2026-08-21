@@ -1,0 +1,15 @@
+{
+  "name": "@djasdh/interest-memory",
+  "version": "1.0.0",
+  "description": "Cross-session long-term memory for AI agents — local Go service (~50MB RAM, SQLite-vec, verify-augmented) with bridges for DeepSeek Harness, Claude Code, Codex, Hermes, OpenClaw, opencode, pi, Reasonix.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@djasdh/interest-memory-dsh-bridge": "0.1.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./bridge/dsh/cordis.patch.yml"
+    }
+  }
+}
